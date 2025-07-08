@@ -27,11 +27,11 @@
 
 ## Worker 部署教程
 
-0.准备工作
+### 0.准备工作
   - 在开始之前你需要一个域名，一个 Telegram Bot 以及 ChatID
-  - 不知道如何获取可以点击[此处](https://blog.xiny.cc/archives/mTaUz0TW)或[仓库备份](https://blog.xiny.cc/archives/mTaUz0TW)
+  - 不知道如何获取可以点击[此处](https://blog.xiny.cc/archives/mTaUz0TW)或[仓库备份](https://github.com/WangQueXL/r2-img-tg/blob/main/docs/tutorial/bot.jpeg)
 
-1.创建 KV 与 R2 存储桶：
+### 1.创建 KV 与 R2 存储桶：
   - 在 Cloudflare 侧边栏中找到 存储与数据库
   - 根据你的喜好创建一个任意名称的 KV
   - 在 Cloudflare 侧边栏中找到 R2 对象存储
@@ -39,7 +39,7 @@
   - 进入刚刚创建的存储桶
   - 点击 设置 找到 自定义域 为你的存储桶添加 自定义域
 
-2-1.直接上传代码部署 
+### 2-1.直接上传代码部署 
  - 在 Cloudflare 侧边栏中找到 计算（Workers）
  - 创建 Worker 并选择 从 Hello World! 开始
  - 填写一个你喜欢的名字部署
@@ -64,7 +64,7 @@
  - 最后在 域和路由 为你的项目添加自定义域名
  - 一切就大功告成了
  
-2-2.导入存储库部署 
+### 2-2.导入存储库部署 
  - Fork 本项目
  - 在 Cloudflare 侧边栏中找到 计算（Workers）
  - 创建 Worker 并选择 导入存储库
