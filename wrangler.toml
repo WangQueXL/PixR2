@@ -1,0 +1,4 @@
+name = "r2-img-tg"
+main = "_worker.js"
+compatibility_date = "2025-07-08"
+keep_vars = true
