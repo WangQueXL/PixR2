@@ -59,8 +59,8 @@
 |TELEGRAM_BOT_TOKEN|Telegram Bot Token|
 |CHAT_ID|允许使用机器人的用户 ID（多个用户请以`,`分隔）|
 |BUCKET_NAME|填入 R2 存储桶 变量名称|
-|BASE_URL|填入 R2 存储桶 的自定义域|
+|BASE_URL|填入 R2 存储桶 自定义域|
 
  - 最后在 域和路由 为你的项目添加自定义域
- - 访问 `https://<你的自定义域>/setWebhook` 完成设置
+ - 访问 `https://<你的自定义域>/setWebhook` 完成 Webhook 设置
  - 一切就大功告成了，现在你可以访问你的 Telegram Bot 以及 Web 面板 开始使用了
