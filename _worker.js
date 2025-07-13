@@ -1,126 +1,193 @@
+// 简易路由器类
+class Router {
+    constructor() {
+        // 存储所有路由规则的数组
+        this.routes = [];
+    }
+
+    /**
+     * 添加一个新的路由规则
+     * @param {string} method - HTTP方法 (e.g., 'GET', 'POST')
+     * @param {string} path - URL路径 (e.g., '/', '/upload')
+     * @param {function} handler - 处理该路由的函数
+     */
+    add(method, path, handler) {
+        this.routes.push({ method, path, handler });
+    }
+
+    /**
+     * 添加一个GET方法的路由
+     * @param {string} path - URL路径
+     * @param {function} handler - 处理函数
+     */
+    get(path, handler) {
+        this.add('GET', path, handler);
+    }
+
+    /**
+     * 添加一个POST方法的路由
+     * @param {string} path - URL路径
+     * @param {function} handler - 处理函数
+     */
+    post(path, handler) {
+        this.add('POST', path, handler);
+    }
+
+    /**
+     * 处理传入的请求，并匹配到对应的路由
+     * @param {Request} request - Cloudflare Worker接收到的请求对象
+     * @param {...any} args - 其他传递给处理函数的参数 (例如 env)
+     * @returns {Promise<Response>} - 返回一个响应对象
+     */
+    async handle(request, ...args) {
+        const url = new URL(request.url);
+        const method = request.method;
+        const path = url.pathname;
+
+        // 遍历所有已注册的路由
+        for (const route of this.routes) {
+            // 如果方法和路径都匹配，则调用对应的处理函数
+            if (route.method === method && route.path === path) {
+                return route.handler(request, ...args);
+            }
+        }
+        // 如果没有找到匹配的路由，返回404
+        return new Response('Not found', { status: 404 });
+    }
+}
+
+// 用于身份验证的中间件
+const requireAuth = (handler) => async (request, env, ...args) => {
+    // 检查用户是否已通过身份验证
+    if (!await isAuthenticated(request, env.SECRET_KEY)) {
+        const url = new URL(request.url);
+        // 如果是API请求，返回401 Unauthorized
+        if (url.pathname.startsWith('/api/')) {
+            return new Response('Unauthorized', { status: 401 });
+        }
+        // 如果是页面请求，重定向到登录页面
+        return Response.redirect(new URL('/', request.url).toString(), 302);
+    }
+    // 如果验证通过，则执行原始的处理函数
+    return handler(request, env, ...args);
+};
+
+
+// Cloudflare Worker 的主入口点
 export default {
 	async fetch(request, env) {
+		// --- 环境变量检查 ---
+		// 定义所有必需的环境变量
 		const requiredEnvVars = ['SECRET_KEY', 'TELEGRAM_BOT_TOKEN', 'CHAT_ID', 'BUCKET_NAME', 'BASE_URL'];
+		// 筛选出缺失的环境变量
 		const missingEnvVars = requiredEnvVars.filter(key => !env[key]);
 
+		// 如果有任何环境变量缺失，则返回一个错误页面
 		if (missingEnvVars.length > 0) {
-			const missingVarsHtml = missingEnvVars.map(key => `<li class="list-group-item font-monospace">${key}</li>`).join('');
-			const errorMessage = `
-				<!DOCTYPE html>
-				<html lang="zh-CN">
-				<head>
-					<meta charset="UTF-8">
-					<meta name="viewport" content="width=device-width, initial-scale=1.0">
-					<title>配置错误 - R2管理</title>
-					<link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.7/css/bootstrap.min.css" rel="stylesheet">
-					<style>
-						body {
-							display: flex;
-							align-items: center;
-							justify-content: center;
-							min-height: 100vh;
-							background-color: #f8f9fa;
-						}
-						.container {
-							max-width: 600px;
-						}
-					</style>
-                    <script>
-                        // SVG 原始代码
-                        const svgIcon = \`<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><g fill="none"><path fill="url(#fluentColorSettings480)" d="M19.494 43.468c1.479.353 2.993.531 4.513.531a19.4 19.4 0 0 0 4.503-.534a1.94 1.94 0 0 0 1.474-1.672l.338-3.071a2.32 2.32 0 0 1 2.183-2.075c.367-.016.732.053 1.068.2l2.807 1.231a1.92 1.92 0 0 0 1.554.01c.247-.105.468-.261.65-.458a20.4 20.4 0 0 0 4.51-7.779a1.94 1.94 0 0 0-.7-2.133l-2.494-1.84a2.326 2.326 0 0 1 0-3.764l2.486-1.836a1.94 1.94 0 0 0 .7-2.138a20.3 20.3 0 0 0-4.515-7.777a1.94 1.94 0 0 0-2.192-.45l-2.806 1.236c-.29.131-.606.2-.926.2a2.34 2.34 0 0 1-2.32-2.088l-.34-3.06a1.94 1.94 0 0 0-1.5-1.681a21.7 21.7 0 0 0-4.469-.519a22 22 0 0 0-4.5.52a1.935 1.935 0 0 0-1.5 1.677l-.34 3.062a2.35 2.35 0 0 1-.768 1.488a2.53 2.53 0 0 1-1.569.6a2.3 2.3 0 0 1-.923-.194l-2.8-1.236a1.94 1.94 0 0 0-2.2.452a20.35 20.35 0 0 0-4.51 7.775a1.94 1.94 0 0 0 .7 2.137l2.488 1.836a2.344 2.344 0 0 1 .701 2.938a2.34 2.34 0 0 1-.7.829l-2.49 1.839a1.94 1.94 0 0 0-.7 2.135a20.3 20.3 0 0 0 4.51 7.782a1.93 1.93 0 0 0 2.193.454l2.818-1.237c.291-.128.605-.194.923-.194h.008a2.34 2.34 0 0 1 2.32 2.074l.338 3.057a1.94 1.94 0 0 0 1.477 1.673M24 30.25a6.25 6.25 0 1 1 0-12.5a6.25 6.25 0 0 1 0 12.5"/><defs><linearGradient id="fluentColorSettings480" x1="33.588" x2="11.226" y1="42.451" y2="7.607" gradientUnits="userSpaceOnUse"><stop stop-color="#70777d"/><stop offset="1" stop-color="#b9c0c7"/></linearGradient></defs></g></svg>\`;                 
-                        // 创建 blob 和 URL
-                        const blob = new Blob([svgIcon], { type: 'image/svg+xml' });
-                        const url = URL.createObjectURL(blob);                  
-                        // 创建 favicon link
-                        const link = document.createElement('link');
-                        link.rel = 'icon';
-                        link.type = 'image/svg+xml';
-                        link.href = url;                    
-                        // 插入到 head 中
-                        document.head.appendChild(link);
-                    </script>
-				</head>
-				<body class="text-center">
-					<div class="container p-4 p-md-5">
-						<div class="card shadow-sm">
-							<div class="card-body p-5">
-								<h1 class="h3 mb-3 fw-normal text-danger">配置错误</h1>
-								<p class="text-muted">检测到以下环境变量缺失或未正确设置：</p>
-								<ul class="list-group mb-4">
-									${missingVarsHtml}
-								</ul>
-								<p class="text-muted small">请前往 Cloudflare Workers 设置页面，在“设置”->“变量”中添加或修改这些环境变量。</p>
-							</div>
-						</div>
-					</div>
-				</body>
-				</html>
-			`;
-			return new Response(errorMessage, {
-				headers: { 'Content-Type': 'text/html; charset=utf-8' },
-				status: 500
-			});
+			return serveErrorPage(missingEnvVars);
 		}
 
-		const SECRET_KEY = env.SECRET_KEY;
-		const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN;
-		const CHAT_ID = env.CHAT_ID.split(','); // Assuming CHAT_ID is a comma-separated string in env
-		const BUCKET_NAME = env.BUCKET_NAME;
-		const BASE_URL = env.BASE_URL;
+		// --- 路由器设置 ---
+		const router = new Router();
 
-		const TELEGRAM_API_URL = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+		// 网页界面路由
+		router.get('/', () => serveLoginPage()); // 根路径，提供登录页面
+		router.get('/index.html', () => serveLoginPage()); // index.html，也提供登录页面
+		router.post('/login', (req) => handleLogin(req, env.SECRET_KEY)); // 处理登录请求
 
-		const url = new URL(request.url);
-		const path = url.pathname;
+		// 需要身份验证的网页界面路由
+		router.get('/upload', requireAuth(serveUploadPage)); // 上传页面
+		router.get('/gallery', requireAuth(serveGalleryPage)); // 图库页面
 
+		// 需要身份验证的API路由
+		router.post('/api/upload', requireAuth((req) => handleWebUpload(req, env[env.BUCKET_NAME], env.BASE_URL))); // 处理网页上传
+		router.get('/api/list', requireAuth((req) => handleListFiles(req, env[env.BUCKET_NAME], env.BASE_URL))); // 列出文件
+		router.post('/api/delete', requireAuth((req) => handleDeleteFiles(req, env[env.BUCKET_NAME]))); // 删除文件
+		router.post('/api/create-folder', requireAuth((req) => handleCreateFolder(req, env[env.BUCKET_NAME]))); // 创建文件夹
+
+		// Telegram机器人路由
+		router.post('/webhook', (req) => handleTelegramWebhook(req, env)); // 处理Telegram的webhook更新
+		// 设置Telegram webhook的辅助路由
+		router.get('/setWebhook', async (req) => {
+			const url = new URL(req.url);
+			const webhookUrl = `${url.protocol}//${url.host}/webhook`;
+			const TELEGRAM_API_URL = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
+			const webhookResponse = await setWebhook(webhookUrl, TELEGRAM_API_URL);
+			if (webhookResponse.ok) {
+				return new Response(`Webhook set successfully to ${webhookUrl}`);
+			}
+			return new Response('Failed to set webhook', { status: 500 });
+		});
+
+
+		// --- 处理请求 ---
 		try {
-			if (path === '/webhook' && request.method === 'POST') {
-				return handleTelegramWebhook(request, env, TELEGRAM_API_URL, CHAT_ID, BUCKET_NAME, BASE_URL);
-			}
-			// Web interface routes
-			if (path === '/login' && request.method === 'POST') {
-				return handleLogin(request, SECRET_KEY);
-			}
-			if (path === '/' || path === '/index.html') {
-				return serveLoginPage();
-			}
-			if (path === '/upload' && await isAuthenticated(request, SECRET_KEY)) {
-				return serveUploadPage();
-			}
-			if (path === '/gallery' && await isAuthenticated(request, SECRET_KEY)) {
-				return serveGalleryPage();
-			}
-			if (path === '/api/upload' && request.method === 'POST' && await isAuthenticated(request, SECRET_KEY)) {
-				return handleWebUpload(request, env[BUCKET_NAME], BASE_URL);
-			}
-			if (path === '/api/list' && await isAuthenticated(request, SECRET_KEY)) {
-				return handleListFiles(request, env[BUCKET_NAME], BASE_URL);
-			}
-			if (path === '/api/delete' && request.method === 'POST' && await isAuthenticated(request, SECRET_KEY)) {
-				return handleDeleteFiles(request, env[BUCKET_NAME]);
-			}
-			if (path === '/api/create-folder' && request.method === 'POST' && await isAuthenticated(request, SECRET_KEY)) {
-				return handleCreateFolder(request, env[BUCKET_NAME]);
-			}
-
-			// Telegram bot routes
-			if (path === '/setWebhook') {
-				const webhookUrl = `${url.protocol}//${url.host}/webhook`;
-				const webhookResponse = await setWebhook(webhookUrl, TELEGRAM_API_URL);
-				if (webhookResponse.ok) {
-					return new Response(`Webhook set successfully to ${webhookUrl}`);
-				}
-				return new Response('Failed to set webhook', {status: 500});
-			}
-
-			return new Response('Not found', {status: 404});
+			// 使用路由器处理请求
+			return await router.handle(request, env);
 		} catch (err) {
 			console.error(err);
-			return new Response('Server error', {status: 500});
+			// 在生产环境中，你可能希望提供一个更友好的错误页面
+			return new Response('Server error: ' + err.message, { status: 500 });
 		}
 	}
 };
 
+/**
+ * 提供一个显示环境变量配置错误的HTML页面
+ * @param {string[]} missingEnvVars - 缺失的环境变量键名数组
+ * @returns {Response} - 包含错误信息的HTML响应
+ */
+function serveErrorPage(missingEnvVars) {
+    const missingVarsHtml = missingEnvVars.map(key => `<li class="list-group-item font-monospace">${key}</li>`).join('');
+    const errorMessage = `
+        <!DOCTYPE html>
+        <html lang="zh-CN">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>配置错误 - R2管理</title>
+            <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.7/css/bootstrap.min.css" rel="stylesheet">
+            <style>
+                body { display: flex; align-items: center; justify-content: center; min-height: 100vh; background-color: #f8f9fa; }
+                .container { max-width: 600px; }
+            </style>
+            <script>
+                const svgIcon = \`<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><g fill="none"><path fill="url(#fluentColorSettings480)" d="M19.494 43.468c1.479.353 2.993.531 4.513.531a19.4 19.4 0 0 0 4.503-.534a1.94 1.94 0 0 0 1.474-1.672l.338-3.071a2.32 2.32 0 0 1 2.183-2.075c.367-.016.732.053 1.068.2l2.807 1.231a1.92 1.92 0 0 0 1.554.01c.247-.105.468-.261.65-.458a20.4 20.4 0 0 0 4.51-7.779a1.94 1.94 0 0 0-.7-2.133l-2.494-1.84a2.326 2.326 0 0 1 0-3.764l2.486-1.836a1.94 1.94 0 0 0 .7-2.138a20.3 20.3 0 0 0-4.515-7.777a1.94 1.94 0 0 0-2.192-.45l-2.806 1.236c-.29.131-.606.2-.926.2a2.34 2.34 0 0 1-2.32-2.088l-.34-3.06a1.94 1.94 0 0 0-1.5-1.681a21.7 21.7 0 0 0-4.469-.519a22 22 0 0 0-4.5.52a1.935 1.935 0 0 0-1.5 1.677l-.34 3.062a2.35 2.35 0 0 1-.768 1.488a2.53 2.53 0 0 1-1.569.6a2.3 2.3 0 0 1-.923-.194l-2.8-1.236a1.94 1.94 0 0 0-2.2.452a20.35 20.35 0 0 0-4.51 7.775a1.94 1.94 0 0 0 .7 2.137l2.488 1.836a2.344 2.344 0 0 1 .701 2.938a2.34 2.34 0 0 1-.7.829l-2.49 1.839a1.94 1.94 0 0 0-.7 2.135a20.3 20.3 0 0 0 4.51 7.782a1.93 1.93 0 0 0 2.193.454l2.818-1.237c.291-.128.605-.194.923-.194h.008a2.34 2.34 0 0 1 2.32 2.074l.338 3.057a1.94 1.94 0 0 0 1.477 1.673M24 30.25a6.25 6.25 0 1 1 0-12.5a6.25 6.25 0 0 1 0 12.5"/><defs><linearGradient id="fluentColorSettings480" x1="33.588" x2="11.226" y1="42.451" y2="7.607" gradientUnits="userSpaceOnUse"><stop stop-color="#70777d"/><stop offset="1" stop-color="#b9c0c7"/></linearGradient></defs></g></svg>\`;
+                const blob = new Blob([svgIcon], { type: 'image/svg+xml' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('link');
+                link.rel = 'icon';
+                link.type = 'image/svg+xml';
+                link.href = url;
+                document.head.appendChild(link);
+            </script>
+        </head>
+        <body class="text-center">
+            <div class="container p-4 p-md-5">
+                <div class="card shadow-sm">
+                    <div class="card-body p-5">
+                        <h1 class="h3 mb-3 fw-normal text-danger">配置错误</h1>
+                        <p class="text-muted">检测到以下环境变量缺失或未正确设置：</p>
+                        <ul class="list-group mb-4">${missingVarsHtml}</ul>
+                        <p class="text-muted small">请前往 Cloudflare Workers 设置页面，在“设置”->“变量”中添加或修改这些环境变量。</p>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>
+    `;
+    return new Response(errorMessage, {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        status: 500
+    });
+}
+
+/**
+ * 调用Telegram API来设置webhook
+ * @param {string} webhookUrl - 要设置的webhook URL
+ * @param {string} apiUrl - Telegram Bot API的基础URL
+ * @returns {Promise<object>} - Telegram API的响应结果
+ */
 async function setWebhook(webhookUrl, apiUrl) {
 	try {
 		const response = await fetch(`${apiUrl}/setWebhook`, {
@@ -142,8 +209,13 @@ async function setWebhook(webhookUrl, apiUrl) {
 	}
 }
 
+/**
+ * 根据文件内容的字节签名检测图片类型
+ * @param {Uint8Array} uint8Array - 图片文件的字节数组
+ * @returns {{mime: string, ext: string}|null} - 如果是支持的图片类型，返回MIME类型和扩展名，否则返回null
+ */
 function detectImageType(uint8Array) {
-	// Check for JPEG signature (FF D8 FF)
+	// 检查JPEG签名 (FF D8 FF)
 	if (uint8Array.length >= 3 &&
 		uint8Array[0] === 0xFF &&
 		uint8Array[1] === 0xD8 &&
@@ -151,7 +223,7 @@ function detectImageType(uint8Array) {
 		return {mime: 'image/jpeg', ext: 'jpg'};
 	}
 
-	// Check for PNG signature (89 50 4E 47 0D 0A 1A 0A)
+	// 检查PNG签名 (89 50 4E 47 0D 0A 1A 0A)
 	const pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 	if (uint8Array.length >= pngSignature.length) {
 		const isPng = pngSignature.every(
@@ -160,42 +232,51 @@ function detectImageType(uint8Array) {
 		if (isPng) return {mime: 'image/png', ext: 'png'};
 	}
 
-	// Add more image type detection as needed (GIF, WebP, etc.)
+	// 可以根据需要添加更多图片类型的检测 (例如 GIF, WebP)
 
 	return null;
 }
 
+/**
+ * 处理来自Telegram的webhook请求
+ * @param {Request} request - 传入的请求
+ * @param {object} env - Cloudflare Worker的环境变量
+ * @returns {Promise<Response>}
+ */
 async function handleTelegramWebhook(request, env) {
 	try {
 		const update = await request.json();
 
+		// 如果更新中没有消息，直接返回OK
 		if (!update.message) {
 			return new Response('OK');
 		}
 
 		const chatId = update.message.chat.id;
 
-		// Check if user is authorized
+		// 检查用户是否已授权 (CHAT_ID环境变量中是否包含该用户的ID)
 		if (!env.CHAT_ID.split(',').includes(chatId.toString())) {
 			return new Response('Unauthorized access', {status: 403});
 		}
 
-		// Get functions for path management
+		// 获取用户当前上传路径的函数
 		async function getUserPath(chatId) {
 			const path = await env.INDEXES_KV.get(chatId.toString());
 			if (path === '/') {
-				return '';
+				return ''; // 根路径返回空字符串
 			}
-			return path || ''; // Default to empty string (root path)
+			return path || ''; // 默认为空字符串 (根路径)
 		}
 
+		// 设置用户上传路径的函数
 		async function setUserPath(chatId, path) {
 			await env.INDEXES_KV.put(chatId.toString(), path);
 		}
 
-		// Handle media uploads
+		// 处理媒体文件上传的函数
 		async function handleMediaUpload(chatId, fileId, isDocument = false) {
 			try {
+				// 发送提示消息
 				await sendMessage(chatId, '收到文件，正在上传ing', `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
 
 				const fileUrl = await getFileUrl(fileId, env.TELEGRAM_BOT_TOKEN);
@@ -215,11 +296,11 @@ async function handleTelegramWebhook(request, env) {
 			}
 		}
 
-		// Process text messages
+		// 处理文本消息
 		if (update.message.text) {
 			const text = update.message.text.trim();
 
-			// Handle /modify command
+			// 处理 /modify 命令，用于修改上传路径
 			if (text.startsWith('/modify')) {
 				const parts = text.split(' ');
 				if (parts.length >= 2) {
@@ -232,7 +313,7 @@ async function handleTelegramWebhook(request, env) {
 				return new Response('OK');
 			}
 
-			// Handle /status command
+			// 处理 /status 命令，用于查看当前上传路径
 			if (text === '/status') {
 				const currentPath = await getUserPath(chatId);
 				const statusMessage = currentPath ? `当前路径: ${currentPath}` : '当前路径: / (默认)';
@@ -240,18 +321,19 @@ async function handleTelegramWebhook(request, env) {
 				return new Response('OK');
 			}
 
-			// Default message for any other text
+			// 对于其他文本消息，发送帮助信息
 			let mes = `请发送一张图片！\n或者使用以下命令：\n/modify 修改上传图片的存储路径\n/status 查看当前上传图片的路径`;
 			await sendMessage(chatId, mes, `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
 			return new Response('OK');
 		}
 
-		// Handle document files
+		// 处理以文件形式发送的图片
 		if (update.message.document) {
 			const doc = update.message.document;
 			const fileName = doc.file_name || '';
 			const fileExt = fileName.split('.').pop().toLowerCase();
 
+			// 检查文件扩展名是否为支持的格式
 			if (!['jpg', 'jpeg', 'png'].includes(fileExt)) {
 				await sendMessage(chatId, '不支持的文件类型，请发送 JPG/PNG 格式文件', `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
 				return new Response('OK');
@@ -261,8 +343,9 @@ async function handleTelegramWebhook(request, env) {
 			return new Response('OK');
 		}
 
-		// Handle photos
+		// 处理以图片形式发送的内容
 		if (update.message.photo) {
+			// Telegram会发送多个尺寸的图片，选择最大尺寸的
 			const fileId = update.message.photo.slice(-1)[0].file_id;
 			await handleMediaUpload(chatId, fileId);
 			return new Response('OK');
@@ -275,19 +358,36 @@ async function handleTelegramWebhook(request, env) {
 	}
 }
 
-// Authentication Functions
+// --- 身份验证相关函数 ---
+
+/**
+ * 检查请求的cookie中是否包含有效的认证信息
+ * @param {Request} request - 传入的请求
+ * @param {string} secretKey - 用于验证的密钥
+ * @returns {Promise<boolean>} - 如果已认证则返回true，否则返回false
+ */
 async function isAuthenticated(request, secretKey) {
 	const cookies = parseCookies(request.headers.get('Cookie') || '');
+	// 比较cookie中的auth值与密钥的哈希值
 	return cookies.auth === hashKey(secretKey).replace(/=/g, '');
 }
 
+/**
+ * 处理登录请求
+ * @param {Request} request - 传入的请求
+ * @param {string} secretKey - 用于验证的密钥
+ * @returns {Promise<Response>} - 成功则重定向到上传页面，失败则返回登录页面并显示错误信息
+ */
 async function handleLogin(request, secretKey) {
 	const formData = await request.formData();
 	const inputKey = formData.get('key');
 
+	// 检查输入的密钥是否正确
 	if (inputKey === secretKey) {
 		const headers = new Headers();
+		// 登录成功，设置一个有效期为一天的HttpOnly cookie
 		headers.append('Set-Cookie', `auth=${hashKey(secretKey).replace(/=/g, '')}; HttpOnly; Path=/; Max-Age=86400`);
+		// 重定向到上传页面
 		headers.append('Location', '/upload');
 		return new Response(null, {
 			status: 302,
@@ -295,15 +395,25 @@ async function handleLogin(request, secretKey) {
 		});
 	}
 
+	// 密钥错误，返回登录页面并显示错误信息
 	return serveLoginPage("密钥错误，请重新输入");
 }
 
+/**
+ * 对密钥进行简单的哈希处理（Base64编码）
+ * 注意：这只是一个示例，生产环境应使用更安全的哈希算法
+ * @param {string} key - 要哈希的字符串
+ * @returns {string} - 哈希后的字符串
+ */
 function hashKey(key) {
-	// Simple hash function for demo purposes
-	// In production, use a proper crypto hash
 	return btoa(key);
 }
 
+/**
+ * 解析cookie字符串为对象
+ * @param {string} cookieString - 从请求头获取的cookie字符串
+ * @returns {object} - 解析后的cookie键值对对象
+ */
 function parseCookies(cookieString) {
 	const cookies = {};
 	cookieString.split(';').forEach(cookie => {
@@ -313,7 +423,13 @@ function parseCookies(cookieString) {
 	return cookies;
 }
 
-// Page Rendering Functions
+// --- 页面渲染函数 ---
+
+/**
+ * 提供登录页面的HTML
+ * @param {string|null} errorMessage - 如果有错误，则显示此消息
+ * @returns {Response} - 包含登录页面HTML的响应
+ */
 function serveLoginPage(errorMessage = null) {
 	const html = `
     <!DOCTYPE html>
@@ -341,16 +457,16 @@ function serveLoginPage(errorMessage = null) {
         <script>
             // SVG 原始代码
             const svgIcon = \`<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><g fill="none"><path fill="url(#fluentColorSettings480)" d="M19.494 43.468c1.479.353 2.993.531 4.513.531a19.4 19.4 0 0 0 4.503-.534a1.94 1.94 0 0 0 1.474-1.672l.338-3.071a2.32 2.32 0 0 1 2.183-2.075c.367-.016.732.053 1.068.2l2.807 1.231a1.92 1.92 0 0 0 1.554.01c.247-.105.468-.261.65-.458a20.4 20.4 0 0 0 4.51-7.779a1.94 1.94 0 0 0-.7-2.133l-2.494-1.84a2.326 2.326 0 0 1 0-3.764l2.486-1.836a1.94 1.94 0 0 0 .7-2.138a20.3 20.3 0 0 0-4.515-7.777a1.94 1.94 0 0 0-2.192-.45l-2.806 1.236c-.29.131-.606.2-.926.2a2.34 2.34 0 0 1-2.32-2.088l-.34-3.06a1.94 1.94 0 0 0-1.5-1.681a21.7 21.7 0 0 0-4.469-.519a22 22 0 0 0-4.5.52a1.935 1.935 0 0 0-1.5 1.677l-.34 3.062a2.35 2.35 0 0 1-.768 1.488a2.53 2.53 0 0 1-1.569.6a2.3 2.3 0 0 1-.923-.194l-2.8-1.236a1.94 1.94 0 0 0-2.2.452a20.35 20.35 0 0 0-4.51 7.775a1.94 1.94 0 0 0 .7 2.137l2.488 1.836a2.344 2.344 0 0 1 .701 2.938a2.34 2.34 0 0 1-.7.829l-2.49 1.839a1.94 1.94 0 0 0-.7 2.135a20.3 20.3 0 0 0 4.51 7.782a1.93 1.93 0 0 0 2.193.454l2.818-1.237c.291-.128.605-.194.923-.194h.008a2.34 2.34 0 0 1 2.32 2.074l.338 3.057a1.94 1.94 0 0 0 1.477 1.673M24 30.25a6.25 6.25 0 1 1 0-12.5a6.25 6.25 0 0 1 0 12.5"/><defs><linearGradient id="fluentColorSettings480" x1="33.588" x2="11.226" y1="42.451" y2="7.607" gradientUnits="userSpaceOnUse"><stop stop-color="#70777d"/><stop offset="1" stop-color="#b9c0c7"/></linearGradient></defs></g></svg>\`;                 
-                // 创建 blob 和 URL
-                const blob = new Blob([svgIcon], { type: 'image/svg+xml' });
-                const url = URL.createObjectURL(blob);                  
-                // 创建 favicon link
-                const link = document.createElement('link');
-                link.rel = 'icon';
-                link.type = 'image/svg+xml';
-                link.href = url;                    
-                // 插入到 head 中
-                document.head.appendChild(link);
+            // 创建 blob 和 URL
+            const blob = new Blob([svgIcon], { type: 'image/svg+xml' });
+            const url = URL.createObjectURL(blob);                  
+            // 创建 favicon link
+            const link = document.createElement('link');
+            link.rel = 'icon';
+            link.type = 'image/svg+xml';
+            link.href = url;                    
+            // 插入到 head 中
+            document.head.appendChild(link);
         </script>
     </head>
     <body class="text-center">
@@ -379,6 +495,10 @@ function serveLoginPage(errorMessage = null) {
 	});
 }
 
+/**
+ * 提供文件上传页面的HTML
+ * @returns {Response} - 包含上传页面HTML的响应
+ */
 function serveUploadPage() {
 	const html = `
     <!DOCTYPE html>
@@ -619,6 +739,10 @@ function serveUploadPage() {
 	});
 }
 
+/**
+ * 提供图库页面的HTML
+ * @returns {Response} - 包含图库页面HTML的响应
+ */
 function serveGalleryPage() {
 	const html = `
 <!DOCTYPE html>
@@ -1087,12 +1211,19 @@ function serveGalleryPage() {
 	});
 }
 
+/**
+ * 处理从网页界面上传的文件
+ * @param {Request} request - 包含文件数据的请求
+ * @param {R2Bucket} bucket - R2存储桶实例
+ * @param {string} baseUrl - 用于构建公共URL的基础URL
+ * @returns {Promise<Response>} - 包含上传结果的JSON响应
+ */
 async function handleWebUpload(request, bucket, baseUrl) {
 	try {
-		// Parse the form data
+		// 解析表单数据
 		const formData = await request.formData();
 		const file = formData.get('file');
-		const path = formData.get('path') || '';
+		const path = formData.get('path') || ''; // 获取自定义路径
 
 		if (!file) {
 			return new Response(JSON.stringify({
@@ -1104,11 +1235,11 @@ async function handleWebUpload(request, bucket, baseUrl) {
 			});
 		}
 
-		// Process file data
+		// 处理文件数据
 		const fileBuffer = await file.arrayBuffer();
 		const uint8Array = new Uint8Array(fileBuffer);
 
-		// Detect file type
+		// 检测文件类型
 		const detectedType = detectImageType(uint8Array);
 		if (!detectedType) {
 			return new Response(JSON.stringify({
@@ -1120,27 +1251,27 @@ async function handleWebUpload(request, bucket, baseUrl) {
 			});
 		}
 
-		// Generate file name with date prefix and UUID
+		// 生成文件名，包含日期前缀和短UUID
 		const date = new Date();
 		const formattedDate = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
 		const shortUUID = crypto.randomUUID().split('-')[0];
 
-		// Build file path with user prefix if provided
+		// 如果提供了路径，则构建完整的文件键
 		let key = `${formattedDate}_${shortUUID}.${detectedType.ext}`;
 		if (path) {
-			// Ensure path has trailing slash
+			// 确保路径以斜杠结尾
 			const formattedPath = path.endsWith('/') ? path : `${path}/`;
 			key = `${formattedPath}${key}`;
 		}
 
-		// Upload to R2
+		// 上传到R2
 		await bucket.put(key, fileBuffer, {
 			httpMetadata: {
 				contentType: detectedType.mime
 			}
 		});
 
-		// Generate URLs for response
+		// 生成响应URL
 		const imageUrl = `${baseUrl}/${key}`;
 
 		return new Response(JSON.stringify({
@@ -1164,23 +1295,30 @@ async function handleWebUpload(request, bucket, baseUrl) {
 	}
 }
 
+/**
+ * 列出R2存储桶中的文件和目录
+ * @param {Request} request - 传入的请求，可能包含prefix, page, pageSize等查询参数
+ * @param {R2Bucket} bucket - R2存储桶实例
+ * @param {string} BASE_URL - 用于构建公共URL的基础URL
+ * @returns {Promise<Response>} - 包含文件和目录列表的JSON响应
+ */
 async function handleListFiles(request, bucket, BASE_URL) {
 	try {
 		const url = new URL(request.url);
 		const prefix = url.searchParams.get('prefix') || '';
 		const delimiter = '/';
 
-		// Get pagination parameters
-		const page = parseInt(url.searchParams.get('page') || '1', 10); // Default to page 1
-		const pageSize = parseInt(url.searchParams.get('pageSize') || '50', 10); // Default to 50 items per page
+		// 获取分页参数
+		const page = parseInt(url.searchParams.get('page') || '1', 10); // 默认为第1页
+		const pageSize = parseInt(url.searchParams.get('pageSize') || '50', 10); // 默认每页50项
 
-		// List objects with the given prefix
+		// 列出对象
 		const listResult = await bucket.list({
 			prefix: prefix,
 			delimiter: delimiter
 		});
 
-		// Format directories (commonPrefixes) and files (objects)
+		// 格式化目录 (commonPrefixes)
 		const directories = (listResult.delimitedPrefixes || []).map(delimitedPrefixes => {
 			const name = delimitedPrefixes.substring(prefix.length).replace(/\/$/, '');
 			return {
@@ -1190,15 +1328,16 @@ async function handleListFiles(request, bucket, BASE_URL) {
 			};
 		});
 
+		// 格式化文件 (objects)
 		const files = (listResult.objects || []).map(object => {
-			// Skip objects that represent the current directory or are used as directory markers
+			// 跳过代表当前目录的对象
 			if (object.key === prefix) {
 				return null;
 			}
 
-			// For actual files, extract just the filename from the full path
+			// 从完整路径中提取文件名
 			const name = object.key.substring(prefix.length);
-			if (!name) return null; // Skip if name is empty
+			if (!name) return null; // 如果文件名为空则跳过
 
 			return {
 				name: name,
@@ -1210,22 +1349,22 @@ async function handleListFiles(request, bucket, BASE_URL) {
 			};
 		}).filter(file => file !== null);
 
-		// Implement pagination
+		// 实现分页
 		const totalFiles = files.length;
 		const totalPages = Math.ceil(totalFiles / pageSize);
 
-		// Calculate starting index for the current page
+		// 计算当前页的起始和结束索引
 		const startIndex = (page - 1) * pageSize;
-		const endIndex = Math.min(startIndex + pageSize, totalFiles); // Ensure we don't exceed the array length
+		const endIndex = Math.min(startIndex + pageSize, totalFiles);
 		const filesOnPage = files.slice(startIndex, endIndex);
 
-		// Calculate parent directory path
+		// 计算父目录路径
 		let parentPath = '';
 		if (prefix) {
 			const parts = prefix.split('/');
-			parts.pop(); // Remove the last part (empty if prefix ends with /)
+			parts.pop(); // 移除最后一个部分 (如果前缀以/结尾，则为空)
 			if (parts.length > 0) {
-				parts.pop(); // Remove the directory name
+				parts.pop(); // 移除目录名
 				parentPath = parts.join('/');
 				if (parentPath) parentPath += '/';
 			}
@@ -1259,15 +1398,17 @@ async function handleListFiles(request, bucket, BASE_URL) {
 	}
 }
 
-
+/**
+ * 从R2存储桶中删除文件
+ * @param {Request} request - 包含要删除文件键(keys)数组的请求
+ * @param {R2Bucket} bucket - R2存储桶实例
+ * @returns {Promise<Response>} - 包含删除结果的JSON响应
+ */
 async function handleDeleteFiles(request, bucket) {
 	try {
-		console.log("Request received");
 		const body = await request.json();
-		console.log("Body parsed", body);
 		const keys = body.keys;
 		if (!keys || !Array.isArray(keys) || keys.length === 0) {
-			console.log("No valid keys provided");
 			return new Response(JSON.stringify({
 				success: false,
 				message: "No valid keys provided for deletion"
@@ -1276,9 +1417,9 @@ async function handleDeleteFiles(request, bucket) {
 				headers: {'Content-Type': 'application/json'}
 			});
 		}
+		// 并行删除所有指定的文件
 		const deletePromises = keys.map(key => bucket.delete(key));
 		await Promise.all(deletePromises);
-		console.log(`${keys.length} files deleted`);
 
 		return new Response(JSON.stringify({
 			success: true,
@@ -1299,10 +1440,14 @@ async function handleDeleteFiles(request, bucket) {
 	}
 }
 
-
+/**
+ * 在R2存储桶中创建文件夹
+ * @param {Request} request - 包含文件夹路径(path)的请求
+ * @param {R2Bucket} bucket - R2存储桶实例
+ * @returns {Promise<Response>} - 包含创建结果的JSON响应
+ */
 async function handleCreateFolder(request, bucket) {
 	try {
-		// Parse the JSON body to get the folder path
 		const body = await request.json();
 		let folderPath = body.path;
 
@@ -1316,13 +1461,13 @@ async function handleCreateFolder(request, bucket) {
 			});
 		}
 
-		// Ensure the folder path ends with a slash
+		// 确保文件夹路径以斜杠结尾
 		if (!folderPath.endsWith('/')) {
 			folderPath += '/';
 		}
 
-		// Create a .null file to represent the folder (a common practice in S3/R2)
-		// This isn't strictly necessary but helps with empty folders
+		// 创建一个.null文件来表示文件夹（这是S3/R2中的一种常见做法）
+		// 这不是严格必需的，但有助于处理空文件夹
 		const nullPath = `${folderPath}.null`;
 		await bucket.put(nullPath, new Uint8Array(0), {
 			httpMetadata: {
@@ -1350,7 +1495,15 @@ async function handleCreateFolder(request, bucket) {
 }
 
 
-
+/**
+ * 从URL下载图片并上传到R2
+ * @param {string} imageUrl - 要下载的图片URL
+ * @param {R2Bucket} bucket - R2存储桶实例
+ * @param {boolean} isDocument - 是否是作为文档发送的
+ * @param {string} userPath - 用户指定的上传子路径
+ * @param {string} BASE_URL - 用于构建公共URL的基础URL
+ * @returns {Promise<object>} - 包含上传结果的对象
+ */
 async function uploadImageToR2(imageUrl, bucket, isDocument = false, userPath = '', BASE_URL) {
 	try {
 		const response = await fetch(imageUrl);
@@ -1371,10 +1524,10 @@ async function uploadImageToR2(imageUrl, bucket, isDocument = false, userPath = 
 		const formattedDate = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
 		const shortUUID = crypto.randomUUID().split('-')[0];
 
-		// Build file path with user prefix if provided
+		// 如果提供了用户路径，则构建完整的文件键
 		let key = `${formattedDate}_${shortUUID}.${detectedType.ext}`;
 		if (userPath) {
-			// Ensure path format is correct (has trailing slash)
+			// 确保路径格式正确（以斜杠结尾）
 			const formattedPath = userPath.endsWith('/') ? userPath : `${userPath}/`;
 			key = `${formattedPath}${key}`;
 		}
@@ -1396,6 +1549,12 @@ async function uploadImageToR2(imageUrl, bucket, isDocument = false, userPath = 
 	}
 }
 
+/**
+ * 从Telegram获取文件的临时下载URL
+ * @param {string} fileId - 文件的唯一ID
+ * @param {string} botToken - Telegram机器人的Token
+ * @returns {Promise<string>} - 文件的可下载URL
+ */
 async function getFileUrl(fileId, botToken) {
 	const response = await fetch(
 		`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`
@@ -1404,6 +1563,13 @@ async function getFileUrl(fileId, botToken) {
 	return `https://api.telegram.org/file/bot${botToken}/${data.result.file_path}`;
 }
 
+/**
+ * 向指定的Telegram聊天发送文本消息
+ * @param {number|string} chatId - 聊天ID
+ * @param {string} text - 要发送的文本
+ * @param {string} apiUrl - Telegram Bot API的基础URL
+ * @param {object} options - 其他API选项 (例如 parse_mode)
+ */
 async function sendMessage(chatId, text, apiUrl, options = {}) {
 	await fetch(`${apiUrl}/sendMessage`, {
 		method: 'POST',
@@ -1416,6 +1582,15 @@ async function sendMessage(chatId, text, apiUrl, options = {}) {
 	});
 }
 
+/**
+ * 向指定的Telegram聊天发送图片
+ * @param {number|string} chatId - 聊天ID
+ * @param {string} photoUrl - 图片的URL
+ * @param {string} apiUrl - Telegram Bot API的基础URL
+ * @param {string} caption - 图片的标题
+ * @param {object} options - 其他API选项 (例如 parse_mode)
+ * @returns {Promise<object>} - Telegram API的响应
+ */
 async function sendPhoto(chatId, photoUrl, apiUrl, caption = "", options = {}) {
 	const response = await fetch(`${apiUrl}/sendPhoto`, {
 		method: 'POST',
