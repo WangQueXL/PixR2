@@ -780,6 +780,7 @@ function serveGalleryPage() {
             let currentPath = '';
             let selectedItems = [];
             let currentPage = 1;
+            let hideTimeout = null;
             
             const galleryEl = document.getElementById('gallery');
             const breadcrumbEl = document.getElementById('breadcrumb');
@@ -1041,8 +1042,15 @@ function serveGalleryPage() {
             });
 
             function showLoading(show) {
-                if (show) loadingModal.show();
-                else setTimeout(() => loadingModal.hide(), 200);
+                if (show) {
+                    if (hideTimeout) {
+                        clearTimeout(hideTimeout);
+                        hideTimeout = null;
+                    }
+                    loadingModal.show();
+                } else {
+                    hideTimeout = setTimeout(() => loadingModal.hide(), 200);
+                }
             }
 
             function showNotification(message, type = 'success') {
