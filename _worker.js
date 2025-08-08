@@ -48,7 +48,8 @@ class Router {
         for (const route of this.routes) {
             // 如果方法和路径都匹配，则调用对应的处理函数
             if (route.method === method && route.path === path) {
-                return route.handler(request, ...args);
+                // 最后一个参数是params对象，对于简单路由，它将是undefined
+                return route.handler(request, ...args.slice(0, -1), args.at(-1));
             }
         }
         // 如果没有找到匹配的路由，返回404
@@ -76,9 +77,16 @@ const requireAuth = (handler) => async (request, env, ...args) => {
 // Cloudflare Worker 的主入口点
 export default {
 	async fetch(request, env) {
+		// --- HTTP to HTTPS Redirection ---
+		const redirectUrl = new URL(request.url);
+		if (redirectUrl.protocol === 'http:') {
+			redirectUrl.protocol = 'https:';
+			return Response.redirect(redirectUrl.href, 301); // 301 表示永久重定向
+		}
+
 		// --- 环境变量检查 ---
 		// 定义所有必需的环境变量
-		const requiredEnvVars = ['SECRET_KEY', 'TELEGRAM_BOT_TOKEN', 'CHAT_ID', 'BUCKET_NAME', 'BASE_URL'];
+		const requiredEnvVars = ['SECRET_KEY', 'TELEGRAM_BOT_TOKEN', 'CHAT_ID', 'BASE_URL', 'BUCKET_R2', 'SHARES_KV', 'INDEXES_KV'];
 		// 筛选出缺失的环境变量
 		const missingEnvVars = requiredEnvVars.filter(key => !env[key]);
 
@@ -86,6 +94,34 @@ export default {
 		if (missingEnvVars.length > 0) {
 			return serveErrorPage(missingEnvVars);
 		}
+
+        const url = new URL(request.url);
+        const path = url.pathname;
+
+        // --- 公共分享路由处理 ---
+        // 检查是否是分享页面路由 /s/:shareId
+        if (path.startsWith('/s/')) {
+            const shareId = path.substring(3);
+            // 新增 ShareId 校验
+            if (!shareId || shareId.length < 8) { // KV 里是8位，确保长度匹配
+                return new Response('Not found', { status: 404 });
+            }
+            return serveSharePage(shareId);
+        }
+        // 检查是否是分享页面的API路由 /api/s/:shareId/list
+        if (path.startsWith('/api/s/')) {
+            const parts = path.substring(7).split('/'); // 移除 /api/s/
+            const shareId = parts[0];
+            // 新增 ShareId 校验
+            if (!shareId || shareId.length < 8) { // 确保 shareId 有效
+                return new Response('Not found', { status: 404 });
+            }
+            // 确保 parts[1] 存在且是 'list'
+            if (parts.length > 1 && parts[1] === 'list') {
+                return handleListSharedFiles(request, env, { shareId });
+            }
+            return new Response('Not found', { status: 404 });
+        }
 
 		// --- 路由器设置 ---
 		const router = new Router();
@@ -100,10 +136,15 @@ export default {
 		router.get('/gallery', requireAuth(serveGalleryPage)); // 图库页面
 
 		// 需要身份验证的API路由
-		router.post('/api/upload', requireAuth((req) => handleWebUpload(req, env[env.BUCKET_NAME], env.BASE_URL))); // 处理网页上传
-		router.get('/api/list', requireAuth((req) => handleListFiles(req, env[env.BUCKET_NAME], env.BASE_URL))); // 列出文件
-		router.post('/api/delete', requireAuth((req) => handleDeleteFiles(req, env[env.BUCKET_NAME]))); // 删除文件
-		router.post('/api/create-folder', requireAuth((req) => handleCreateFolder(req, env[env.BUCKET_NAME]))); // 创建文件夹
+		router.post('/api/upload', requireAuth((req) => handleWebUpload(req, env.BUCKET_R2, env.BASE_URL))); // 处理网页上传
+		router.get('/api/list', requireAuth((req) => handleListFiles(req, env.BUCKET_R2, env.BASE_URL))); // 列出文件
+		router.post('/api/delete', requireAuth((req) => handleDeleteFiles(req, env.BUCKET_R2))); // 删除文件
+		router.post('/api/create-folder', requireAuth((req) => handleCreateFolder(req, env.BUCKET_R2))); // 创建文件夹
+
+        // 新增：分享管理API路由
+        router.post('/api/share/create', requireAuth((req) => handleCreateShare(req, env)));
+        router.get('/api/share/list', requireAuth((req) => handleListShares(req, env)));
+        router.post('/api/share/delete', requireAuth((req) => handleDeleteShare(req, env)));
 
 		// Telegram机器人路由
 		router.post('/webhook', (req) => handleTelegramWebhook(req, env)); // 处理Telegram的webhook更新
@@ -145,7 +186,7 @@ function serveErrorPage(missingEnvVars) {
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>配置错误 - R2管理</title>
+            <title>R2管理 - 配置错误</title>
             <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.7/css/bootstrap.min.css" rel="stylesheet">
             <style>
                 body { display: flex; align-items: center; justify-content: center; min-height: 100vh; background-color: #f8f9fa; }
@@ -167,9 +208,10 @@ function serveErrorPage(missingEnvVars) {
                 <div class="card shadow-sm">
                     <div class="card-body p-5">
                         <h1 class="h3 mb-3 fw-normal text-danger">配置错误</h1>
-                        <p class="text-muted">检测到以下环境变量缺失或未正确设置：</p>
+                        <p class="text-muted">检测到以下环境变量缺失：</p>
                         <ul class="list-group mb-4">${missingVarsHtml}</ul>
-                        <p class="text-muted small">请前往 Cloudflare Workers 设置页面，在“设置”->“变量”中添加或修改这些环境变量。</p>
+                        <p class="text-muted small">请前往 Cloudflare 面板，添加这些环境变量</p>
+                        <p class="text-muted small">缺失 BUCKET_R2, SHARES_KV, INDEXES_KV 时，请检查你的 R2/KV 是否绑定成功</p>
                     </div>
                 </div>
             </div>
@@ -232,7 +274,21 @@ function detectImageType(uint8Array) {
 		if (isPng) return {mime: 'image/png', ext: 'png'};
 	}
 
-	// 可以根据需要添加更多图片类型的检测 (例如 GIF, WebP)
+	// 检查GIF签名 (47 49 46 38)
+	if (uint8Array.length >= 4 &&
+		uint8Array[0] === 0x47 &&
+		uint8Array[1] === 0x49 &&
+		uint8Array[2] === 0x46 &&
+		uint8Array[3] === 0x38) {
+		return {mime: 'image/gif', ext: 'gif'};
+	}
+
+	// 检查WebP签名 (RIFF .... WEBP)
+	if (uint8Array.length >= 12 &&
+		uint8Array[0] === 0x52 && uint8Array[1] === 0x49 && uint8Array[2] === 0x46 && uint8Array[3] === 0x46 &&
+		uint8Array[8] === 0x57 && uint8Array[9] === 0x45 && uint8Array[10] === 0x42 && uint8Array[11] === 0x50) {
+		return {mime: 'image/webp', ext: 'webp'};
+	}
 
 	return null;
 }
@@ -281,7 +337,7 @@ async function handleTelegramWebhook(request, env) {
 
 				const fileUrl = await getFileUrl(fileId, env.TELEGRAM_BOT_TOKEN);
 				const userPath = await getUserPath(chatId);
-				const uploadResult = await uploadImageToR2(fileUrl, env[env.BUCKET_NAME], isDocument, userPath, env.BASE_URL);
+				const uploadResult = await uploadImageToR2(fileUrl, env.BUCKET_R2, isDocument, userPath, env.BASE_URL);
 
 				if (uploadResult.ok) {
 					const imageUrl = `${env.BASE_URL}/${uploadResult.key}`;
@@ -308,7 +364,7 @@ async function handleTelegramWebhook(request, env) {
 					await setUserPath(chatId, newPath);
 					await sendMessage(chatId, `修改路径为${newPath}`, `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
 				} else {
-					await sendMessage(chatId, '请指定路径，例如：/modify blog', `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
+					await sendMessage(chatId, '请指定路径，例如: /modify blog', `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
 				}
 				return new Response('OK');
 			}
@@ -334,8 +390,8 @@ async function handleTelegramWebhook(request, env) {
 			const fileExt = fileName.split('.').pop().toLowerCase();
 
 			// 检查文件扩展名是否为支持的格式
-			if (!['jpg', 'jpeg', 'png'].includes(fileExt)) {
-				await sendMessage(chatId, '不支持的文件类型，请发送 JPG/PNG 格式文件', `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
+			if (!['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(fileExt)) {
+				await sendMessage(chatId, '不支持的文件类型，请发送 JPG/PNG/GIF/WEBP 格式文件', `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
 				return new Response('OK');
 			}
 
@@ -386,7 +442,7 @@ async function handleLogin(request, secretKey) {
 	if (inputKey === secretKey) {
 		const headers = new Headers();
 		// 登录成功，设置一个有效期为一天的HttpOnly cookie
-		headers.append('Set-Cookie', `auth=${hashKey(secretKey).replace(/=/g, '')}; HttpOnly; Path=/; Max-Age=86400`);
+		headers.append('Set-Cookie', `auth=${hashKey(secretKey).replace(/=/g, '')}; SameSite=Lax; Secure; HttpOnly; Path=/; Max-Age=86400`);
 		// 重定向到上传页面
 		headers.append('Location', '/upload');
 		return new Response(null, {
@@ -565,8 +621,8 @@ function serveUploadPage() {
                     <div class="dropzone text-center p-5 mb-3" id="dropzone">
                         <i class="bi bi-upload fs-1 text-primary"></i>
                         <p class="mt-3">拖拽文件到此处或点击选择文件</p>
-                        <p class="text-muted small">支持 JPG 和 PNG 格式</p>
-                        <input type="file" id="fileInput" class="d-none" accept="image/jpeg,image/png" multiple>
+                        <p class="text-muted small">支持 JPG, PNG, GIF, WEBP 格式</p>
+                        <input type="file" id="fileInput" class="d-none" accept="image/jpeg,image/png,image/gif,image/webp" multiple>
                     </div>
 
                     <div class="mb-3">
@@ -617,9 +673,9 @@ function serveUploadPage() {
                 fileInput.addEventListener('change', () => { handleFiles(fileInput.files); });
 
                 function handleFiles(files) {
-                    const validFiles = Array.from(files).filter(file => ['image/jpeg', 'image/png'].includes(file.type.toLowerCase()));
+                    const validFiles = Array.from(files).filter(file => ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type.toLowerCase()));
                     if (validFiles.length === 0 && files.length > 0) {
-                        alert('只支持 JPG 和 PNG 格式的图片文件');
+                        alert('只支持 JPG, PNG, GIF, WEBP 格式的图片文件');
                         return;
                     }
                     selectedFiles = [...selectedFiles, ...validFiles];
@@ -806,6 +862,25 @@ function serveGalleryPage() {
             object-fit: contain;
             cursor: default;
         }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1250;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease-in-out, visibility 0.2s;
+        }
+        .loading-overlay.show {
+            opacity: 1;
+            visibility: visible;
+        }
     </style>
     <script>
         // SVG 原始代码
@@ -824,16 +899,27 @@ function serveGalleryPage() {
 </head>
 <body class="bg-light">
     <header>
-        <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm">
-            <div class="container">
-                <a class="navbar-brand fw-bold" href="#">R2管理</a>
-                <div class="d-flex align-items-center">
-                    <a href="/upload" class="btn btn-outline-primary me-2">上传图片</a>
-                    <button id="newFolderBtn" class="btn btn-secondary me-2">新建文件夹</button>
-                    <button id="deleteBtn" class="btn btn-danger" disabled>删除所选</button>
-                </div>
+      <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm">
+        <div class="container">
+          <a class="navbar-brand fw-bold" href="#">R2管理</a>
+  
+          <!-- 移动端折叠按钮 -->
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarButtons" aria-controls="navbarButtons" aria-expanded="false" aria-label="切换导航">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+  
+          <!-- 按钮区 -->
+          <div class="collapse navbar-collapse justify-content-end" id="navbarButtons">
+            <div class="d-flex flex-lg-row flex-column align-items-lg-center pt-2 pt-lg-0">
+              <a href="/upload" class="btn btn-primary me-lg-2 mb-2 mb-lg-0">上传图片</a>
+              <button id="newFolderBtn" class="btn btn-outline-secondary me-lg-2 mb-2 mb-lg-0">新建文件夹</button>
+              <button id="shareFolderBtn" class="btn btn-outline-secondary me-lg-2 mb-2 mb-lg-0">分享文件夹</button>
+              <button id="manageSharesBtn" class="btn btn-outline-secondary me-lg-2 mb-2 mb-lg-0">管理分享</button>
+              <button id="deleteBtn" class="btn btn-danger" disabled>删除所选</button>
             </div>
-        </nav>
+          </div>
+        </div>
+      </nav>
     </header>
 
     <div class="container my-4">
@@ -857,6 +943,7 @@ function serveGalleryPage() {
         </div>
     </div>
 
+    <!-- Modals -->
     <div class="modal fade" id="folderModal" tabindex="-1" aria-labelledby="folderModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
@@ -876,11 +963,50 @@ function serveGalleryPage() {
         </div>
     </div>
 
-    <div class="modal fade" id="loading" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered justify-content-center" style="background: none; border: none;">
-            <div class="spinner-border text-light" role="status" style="width: 3rem; height: 3rem;">
-                <span class="visually-hidden">Loading...</span>
+    <div class="modal fade" id="shareCreatedModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">分享链接已创建</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>已为文件夹 <strong id="sharedPath" class="font-monospace"></strong> 创建分享链接:</p>
+                    <div class="input-group">
+                        <input type="text" id="shareLinkInput" class="form-control" readonly>
+                        <button class="btn btn-outline-secondary" id="copyShareLinkBtn">复制</button>
+                    </div>
+                </div>
             </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="manageSharesModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">管理分享链接</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>分享路径</th>
+                                <th>链接</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sharesList"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
+            <span class="visually-hidden">Loading...</span>
         </div>
     </div>
 
@@ -895,6 +1021,9 @@ function serveGalleryPage() {
     </div>
 
     <div id="imagePreview" class="image-preview-overlay">
+        <button id="previewCloseBtn" class="btn-close btn-close-white position-absolute top-0 end-0 m-3 fs-4" style="z-index: 1201;"></button>
+        <button id="previewPrevBtn" class="btn btn-outline-light position-absolute top-50 start-0 translate-middle-y m-3 fs-3"><</button>
+        <button id="previewNextBtn" class="btn btn-outline-light position-absolute top-50 end-0 translate-middle-y m-3 fs-3">></button>
         <img class="preview-content" id="previewImage">
     </div>
 
@@ -904,7 +1033,10 @@ function serveGalleryPage() {
             let currentPath = '';
             let selectedItems = [];
             let currentPage = 1;
-            let hideTimeout = null;
+            let loadingTimer = null;
+            let loadingStart = 0;
+            let currentImageList = [];
+            let currentImageIndex = -1;
             
             const galleryEl = document.getElementById('gallery');
             const breadcrumbEl = document.getElementById('breadcrumb');
@@ -914,10 +1046,16 @@ function serveGalleryPage() {
             const selectAllContainer = document.getElementById('selectAllContainer');
             const imagePreview = document.getElementById('imagePreview');
             const previewImage = document.getElementById('previewImage');
+            const loadingOverlay = document.getElementById('loading-overlay');
+            const previewCloseBtn = document.getElementById('previewCloseBtn');
+            const previewPrevBtn = document.getElementById('previewPrevBtn');
+            const previewNextBtn = document.getElementById('previewNextBtn');
             
             const folderModal = new bootstrap.Modal(document.getElementById('folderModal'));
-            const loadingModal = new bootstrap.Modal(document.getElementById('loading'));
             const notificationToast = new bootstrap.Toast(document.getElementById('notification'));
+            const shareCreatedModal = new bootstrap.Modal(document.getElementById('shareCreatedModal'));
+            const manageSharesModal = new bootstrap.Modal(document.getElementById('manageSharesModal'));
+            const sharesListEl = document.getElementById('sharesList');
 
             const urlParams = new URLSearchParams(window.location.search);
             currentPage = parseInt(urlParams.get('page')) || 1;
@@ -983,6 +1121,9 @@ function serveGalleryPage() {
 
             function renderGallery(directories, files) {
                 galleryEl.innerHTML = '';
+                currentImageList = files
+                    .filter(file => file.name !== '.null')
+                    .map(file => file.url);
                 const hasFiles = files.length > 0;
                 selectAllContainer.style.display = hasFiles ? 'flex' : 'none';
 
@@ -1049,16 +1190,14 @@ function serveGalleryPage() {
                     const previewBtn = e.target.closest('.preview-btn');
                     if (previewBtn) {
                         e.stopPropagation(); // 防止触发选中
-                        const imageUrl = previewBtn.dataset.url;
-                        previewImage.src = imageUrl;
-                        imagePreview.classList.add('show');
+                        openPreview(previewBtn.dataset.url);
                         return;
                     }
 
-                    // 检查点击目标是否是复选框、图片或二进制文件图标
                     const isSelectableTarget = e.target.classList.contains('checkbox') ||
                                                e.target.classList.contains('file-image') ||
-                                               e.target.classList.contains('bi-file-earmark-binary');
+                                               e.target.classList.contains('bi-file-earmark-binary') ||
+                                               e.target.closest('.card-footer');
 
                     if (isSelectableTarget) {
                         const key = itemEl.dataset.key;
@@ -1165,15 +1304,97 @@ function serveGalleryPage() {
                 }
             });
 
-            function showLoading(show) {
-                if (show) {
-                    if (hideTimeout) {
-                        clearTimeout(hideTimeout);
-                        hideTimeout = null;
+            document.getElementById('shareFolderBtn').addEventListener('click', async () => {
+                const result = await apiCall('/api/share/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: currentPath })
+                });
+                if (result.success) {
+                    document.getElementById('sharedPath').textContent = result.path || '/';
+                    document.getElementById('shareLinkInput').value = result.url;
+                    shareCreatedModal.show();
+                }
+            });
+
+            document.getElementById('copyShareLinkBtn').addEventListener('click', (e) => {
+                const input = document.getElementById('shareLinkInput');
+                navigator.clipboard.writeText(input.value).then(() => {
+                    const btn = e.currentTarget;
+                    const originalText = btn.textContent;
+                    btn.textContent = '已复制!';
+                    setTimeout(() => { btn.textContent = originalText; }, 2000);
+                });
+            });
+
+            document.getElementById('manageSharesBtn').addEventListener('click', async () => {
+                const result = await apiCall('/api/share/list');
+                if (result.success) {
+                    sharesListEl.innerHTML = '';
+                    if (result.shares.length === 0) {
+                        sharesListEl.innerHTML = '<tr><td colspan="3" class="text-center">没有已创建的分享链接</td></tr>';
+                    } else {
+                        result.shares.forEach(share => {
+                            const tr = document.createElement('tr');
+                            tr.innerHTML = \`
+                                <td><span class="font-monospace">\${share.path || '/'}</span></td>
+                                <td><a href="\${share.url}" target="_blank">\${share.url}</a></td>
+                                <td>
+                                    <button class="btn btn-sm btn-danger revoke-share-btn" data-share-id="\${share.shareId}">撤销</button>
+                                </td>
+                            \`;
+                            sharesListEl.appendChild(tr);
+                        });
                     }
-                    loadingModal.show();
+                    manageSharesModal.show();
+                }
+            });
+
+            sharesListEl.addEventListener('click', async (e) => {
+                if (e.target.classList.contains('revoke-share-btn')) {
+                    const shareId = e.target.dataset.shareId;
+                    if (confirm(\`确定要撤销这个分享链接吗？\`)) {
+                        const result = await apiCall('/api/share/delete', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ shareId })
+                        });
+                        if (result.success) {
+                            showNotification('分享链接已撤销', 'success');
+                            e.target.closest('tr').remove();
+                            if (sharesListEl.children.length === 0) {
+                                sharesListEl.innerHTML = '<tr><td colspan="3" class="text-center">没有已创建的分享链接</td></tr>';
+                            }
+                        }
+                    }
+                }
+            });
+
+            function showLoading(show) {
+                const DELAY = 100; // ms to wait before showing loader
+                const MIN_TIME = 350; // ms minimum display time for loader
+
+                if (show) {
+                    clearTimeout(loadingTimer); // Clear any pending hide timers
+                    loadingTimer = setTimeout(() => {
+                        loadingOverlay.classList.add('show');
+                        loadingStart = Date.now();
+                    }, DELAY);
                 } else {
-                    hideTimeout = setTimeout(() => loadingModal.hide(), 200);
+                    clearTimeout(loadingTimer); // Cancel showing the loader if it hasn't appeared yet
+                    if (loadingStart > 0) { // If the loader was shown
+                        const elapsed = Date.now() - loadingStart;
+                        const remaining = MIN_TIME - elapsed;
+                        if (remaining > 0) {
+                            setTimeout(() => {
+                                loadingOverlay.classList.remove('show');
+                                loadingStart = 0;
+                            }, remaining);
+                        } else {
+                            loadingOverlay.classList.remove('show');
+                            loadingStart = 0;
+                        }
+                    }
                 }
             }
 
@@ -1194,10 +1415,62 @@ function serveGalleryPage() {
 
             imagePreview.addEventListener('click', (e) => {
                 if (e.target === imagePreview) {
-                    imagePreview.classList.remove('show');
-                    previewImage.src = '';
+                    closePreview();
                 }
             });
+
+            previewCloseBtn.addEventListener('click', closePreview);
+            previewPrevBtn.addEventListener('click', showPrevImage);
+            previewNextBtn.addEventListener('click', showNextImage);
+
+            document.addEventListener('keydown', (e) => {
+                if (!imagePreview.classList.contains('show')) return;
+                if (e.key === 'ArrowLeft') showPrevImage();
+                if (e.key === 'ArrowRight') showNextImage();
+                if (e.key === 'Escape') closePreview();
+            });
+
+            function openPreview(imageUrl) {
+                currentImageIndex = currentImageList.indexOf(imageUrl);
+                if (currentImageIndex === -1) return;
+
+                previewImage.src = imageUrl;
+                imagePreview.classList.add('show');
+                updateNavButtons();
+            }
+
+            function closePreview() {
+                imagePreview.classList.remove('show');
+                previewImage.src = '';
+                currentImageIndex = -1;
+            }
+
+            function updateNavButtons() {
+                const hasMultipleImages = currentImageList.length > 1;
+                previewPrevBtn.style.display = hasMultipleImages ? 'block' : 'none';
+                previewNextBtn.style.display = hasMultipleImages ? 'block' : 'none';
+                
+                if(hasMultipleImages) {
+                    previewPrevBtn.disabled = currentImageIndex === 0;
+                    previewNextBtn.disabled = currentImageIndex === currentImageList.length - 1;
+                }
+            }
+
+            function showPrevImage() {
+                if (currentImageIndex > 0) {
+                    currentImageIndex--;
+                    previewImage.src = currentImageList[currentImageIndex];
+                    updateNavButtons();
+                }
+            }
+
+            function showNextImage() {
+                if (currentImageIndex < currentImageList.length - 1) {
+                    currentImageIndex++;
+                    previewImage.src = currentImageList[currentImageIndex];
+                    updateNavButtons();
+                }
+            }
 
             loadGallery();
         });
@@ -1209,6 +1482,373 @@ function serveGalleryPage() {
 	return new Response(html, {
 		headers: {'Content-Type': 'text/html; charset=utf-8'}
 	});
+}
+
+/**
+ * 提供公共分享页面的HTML
+ * @param {string} shareId 分享ID
+ * @returns {Response} 包含分享页面HTML的响应
+ */
+function serveSharePage(shareId) {
+    const html = `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>R2分享 - 浏览</title>
+    <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.7/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.13.1/font/bootstrap-icons.min.css">
+    <style>
+        .gallery .item .card { cursor: pointer; transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out; }
+        .gallery .item .card:hover { transform: translateY(-5px); box-shadow: 0 .5rem 1rem rgba(0,0,0,.15)!important; }
+        .gallery .item .file-image { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; }
+        .directory-icon { font-size: 4rem; color: #ffc107; }
+        .image-preview-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.85); display: none; justify-content: center; align-items: center; z-index: 1200; cursor: pointer; }
+        .image-preview-overlay.show { display: flex; }
+        .preview-content { max-width: 90vw; max-height: 90vh; object-fit: contain; cursor: default; }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1250;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease-in-out, visibility 0.2s;
+        }
+        .loading-overlay.show {
+            opacity: 1;
+            visibility: visible;
+        }
+    </style>
+    <script>
+        // SVG 原始代码
+        const svgIcon = \`<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24"><g fill="none"><path fill="url(#fluentColorShareAndroid246)" d="m16.628 5.349l.744 1.302L8.012 12l9.36 5.349l-.744 1.302L4.988 12z"/><path fill="url(#fluentColorShareAndroid240)" d="m16.628 5.349l.744 1.302L8.012 12l9.36 5.349l-.744 1.302L4.988 12z"/><path fill="url(#fluentColorShareAndroid241)" d="m16.628 5.349l.744 1.302L8.012 12l9.36 5.349l-.744 1.302L4.988 12z"/><path fill="url(#fluentColorShareAndroid242)" d="m16.628 5.349l.744 1.302L8.012 12l9.36 5.349l-.744 1.302L4.988 12z"/><path fill="url(#fluentColorShareAndroid243)" d="M20.5 18a3.5 3.5 0 1 1-7 0a3.5 3.5 0 0 1 7 0"/><path fill="url(#fluentColorShareAndroid244)" d="M10 12a3.5 3.5 0 1 1-7 0a3.5 3.5 0 0 1 7 0"/><path fill="url(#fluentColorShareAndroid245)" d="M20.5 6a3.5 3.5 0 1 1-7 0a3.5 3.5 0 0 1 7 0"/><defs><radialGradient id="fluentColorShareAndroid240" cx="0" cy="0" r="1" gradientTransform="matrix(-4.00002 -2.49997 2.44863 -3.91786 17 18)" gradientUnits="userSpaceOnUse"><stop offset=".549" stop-color="#70777d"/><stop offset="1" stop-color="#70777d" stop-opacity="0"/></radialGradient><radialGradient id="fluentColorShareAndroid241" cx="0" cy="0" r="1" gradientTransform="matrix(4.5 0 0 5.85787 6.5 12)" gradientUnits="userSpaceOnUse"><stop offset=".549" stop-color="#70777d"/><stop offset="1" stop-color="#70777d" stop-opacity="0"/></radialGradient><radialGradient id="fluentColorShareAndroid242" cx="0" cy="0" r="1" gradientTransform="matrix(-4.08698 2.10583 -2.44201 -4.73943 17 6)" gradientUnits="userSpaceOnUse"><stop offset=".549" stop-color="#70777d"/><stop offset="1" stop-color="#70777d" stop-opacity="0"/></radialGradient><radialGradient id="fluentColorShareAndroid243" cx="0" cy="0" r="1" gradientTransform="matrix(11.22915 15.23954 -13.05196 9.61725 9.27 6.698)" gradientUnits="userSpaceOnUse"><stop offset=".529" stop-color="#0fafff"/><stop offset="1" stop-color="#0078d4"/></radialGradient><radialGradient id="fluentColorShareAndroid244" cx="0" cy="0" r="1" gradientTransform="matrix(11.22915 15.23954 -13.05196 9.61725 -1.23 .698)" gradientUnits="userSpaceOnUse"><stop offset=".529" stop-color="#0fafff"/><stop offset="1" stop-color="#0078d4"/></radialGradient><radialGradient id="fluentColorShareAndroid245" cx="0" cy="0" r="1" gradientTransform="matrix(11.22915 15.23954 -13.05196 9.61725 9.27 -5.302)" gradientUnits="userSpaceOnUse"><stop offset=".529" stop-color="#0fafff"/><stop offset="1" stop-color="#0078d4"/></radialGradient><linearGradient id="fluentColorShareAndroid246" x1="4.988" x2="10.03" y1="5.349" y2="18.759" gradientUnits="userSpaceOnUse"><stop stop-color="#b9c0c7"/><stop offset="1" stop-color="#70777d"/></linearGradient></defs></g></svg>\`;                 
+        // 创建 blob 和 URL
+        const blob = new Blob([svgIcon], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(blob);                  
+        // 创建 favicon link
+        const link = document.createElement('link');
+        link.rel = 'icon';
+        link.type = 'image/svg+xml';
+        link.href = url;                    
+        // 插入到 head 中
+        document.head.appendChild(link);
+    </script>
+</head>
+<body class="bg-light">
+    <header>
+        <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm">
+            <div class="container">
+                <a class="navbar-brand fw-bold" href="#">R2分享</a>
+            </div>
+        </nav>
+    </header>
+
+    <div class="container my-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <nav id="breadcrumb" style="--bs-breadcrumb-divider: '>';" aria-label="breadcrumb" class="mb-3"></nav>
+                <div class="row row-cols-2 row-cols-sm-3 row-cols-md-4 row-cols-lg-5 row-cols-xl-6 g-3" id="gallery"></div>
+                <nav id="paginationContainer" class="mt-4" aria-label="Page navigation">
+                    <ul class="pagination justify-content-center" id="pagination"></ul>
+                </nav>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+    
+    <div id="imagePreview" class="image-preview-overlay">
+        <button id="previewCloseBtn" class="btn-close btn-close-white position-absolute top-0 end-0 m-3 fs-4" style="z-index: 1201;"></button>
+        <button id="previewPrevBtn" class="btn btn-outline-light position-absolute top-50 start-0 translate-middle-y m-3 fs-3"><</button>
+        <button id="previewNextBtn" class="btn btn-outline-light position-absolute top-50 end-0 translate-middle-y m-3 fs-3">></button>
+        <img class="preview-content" id="previewImage">
+    </div>
+
+    <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.7/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const shareId = '${shareId}';
+            let currentRelativePath = '';
+            let shareRootPath = '';
+            let currentPage = 1;
+            let loadingTimer = null;
+            let loadingStart = 0;
+            let currentImageList = [];
+            let currentImageIndex = -1;
+            
+            const galleryEl = document.getElementById('gallery');
+            const breadcrumbEl = document.getElementById('breadcrumb');
+            const paginationEl = document.getElementById('pagination');
+            const imagePreview = document.getElementById('imagePreview');
+            const previewImage = document.getElementById('previewImage');
+            const loadingOverlay = document.getElementById('loading-overlay');
+            const previewCloseBtn = document.getElementById('previewCloseBtn');
+            const previewPrevBtn = document.getElementById('previewPrevBtn');
+            const previewNextBtn = document.getElementById('previewNextBtn');
+
+            async function loadGallery() {
+                showLoading(true);
+                galleryEl.innerHTML = '';
+                try {
+                    const response = await fetch(\`/api/s/\${shareId}/list?prefix=\${encodeURIComponent(currentRelativePath)}&page=\${currentPage}\`);
+                    if (!response.ok) {
+                        const errorText = response.status === 404 ? '分享链接不存在或已失效。' : '加载失败，请稍后再试。';
+                        throw new Error(errorText);
+                    }
+                    const data = await response.json();
+                    if (data && data.success) {
+                        if (shareRootPath === '') {
+                           // On first load, determine the root path of the share from the response
+                           shareRootPath = data.currentPath.substring(0, data.currentPath.length - currentRelativePath.length);
+                        }
+                        updateBreadcrumb(data.currentPath);
+                        renderGallery(data.directories, data.files);
+                        renderPagination(data.pagination);
+                    } else {
+                        throw new Error(data.message || '加载内容失败');
+                    }
+                } catch (error) {
+                    galleryEl.innerHTML = \`<div class="col"><p class="text-danger text-center">\${error.message}</p></div>\`;
+                } finally {
+                    showLoading(false);
+                }
+            }
+
+            function updateBreadcrumb(fullPath) {
+                breadcrumbEl.innerHTML = '<ol class="breadcrumb mb-0"></ol>';
+                const ol = breadcrumbEl.querySelector('ol');
+                
+                const homeItem = document.createElement('li');
+                homeItem.className = 'breadcrumb-item';
+                homeItem.innerHTML = '<a href="#" data-path="">分享首页</a>';
+                ol.appendChild(homeItem);
+
+                const relativePath = fullPath.substring(shareRootPath.length);
+                if (relativePath) {
+                    let pathAccumulator = '';
+                    const parts = relativePath.replace(/\\/$/, '').split('/');
+                    parts.forEach(part => {
+                        if (!part) return;
+                        pathAccumulator += part + '/';
+                        const item = document.createElement('li');
+                        item.className = 'breadcrumb-item';
+                        item.innerHTML = \`<a href="#" data-path="\${pathAccumulator}">\${part}</a>\`;
+                        ol.appendChild(item);
+                    });
+                }
+                ol.lastChild.classList.add('active');
+                ol.lastChild.setAttribute('aria-current', 'page');
+                ol.lastChild.innerHTML = ol.lastChild.textContent;
+            }
+
+            function renderGallery(directories, files) {
+                galleryEl.innerHTML = '';
+                currentImageList = files
+                    .filter(file => file.name !== '.null')
+                    .map(file => file.url);
+                const items = [...directories.map(d => ({...d, isDir: true})), ...files.map(f => ({...f, isFile: true}))];
+                if (items.length === 0) {
+                    galleryEl.innerHTML = '<div class="col"><p class="text-muted text-center">此文件夹为空</p></div>';
+                    return;
+                }
+                items.forEach(item => {
+                    const col = document.createElement('div');
+                    col.className = 'col item';
+                    if (item.isDir) {
+                        col.innerHTML = \`
+                            <div class="card text-center h-100" data-path="\${item.path.substring(shareRootPath.length)}">
+                                <div class="card-body d-flex flex-column justify-content-center align-items-center">
+                                    <i class="bi bi-folder-fill directory-icon"></i>
+                                    <p class="card-text text-truncate mt-2" title="\${item.name}">\${item.name}</p>
+                                </div>
+                            </div>
+                        \`;
+                    } else {
+                        col.innerHTML = \`
+                           <div class="card h-100">
+                               \${item.name === '.null' 
+                                   ? '<div class="card-body text-center d-flex flex-column justify-content-center align-items-center"><i class="bi bi-file-earmark-binary fs-1"></i></div>'
+                                   : \`<img src="\${item.url}" class="card-img-top file-image w-100 h-100 object-fit-cover" alt="\${item.name}">\`
+                               }
+                               <div class="card-footer text-body-secondary small">
+                                   <div class="d-flex justify-content-between align-items-center">
+                                       <div class="flex-grow-1 text-truncate me-2">
+                                           <p class="card-text text-truncate mb-0" title="\${item.name}">\${item.name}</p>
+                                           <p class="card-text mb-0"><small>\${formatFileSize(item.size)}</small></p>
+                                       </div>
+                                       \${item.name !== '.null' ? \`<button class="btn btn-sm btn-outline-secondary preview-btn flex-shrink-0" data-url="\${item.url}"><i class="bi bi-eye"></i></button>\` : ''}
+                                   </div>
+                               </div>
+                           </div>
+                       \`;
+                    }
+                    galleryEl.appendChild(col);
+                });
+            }
+
+            function renderPagination({ totalPages }) {
+                paginationEl.innerHTML = '';
+                if (totalPages <= 1) return;
+                const createPageItem = (page, text, isActive = false, isDisabled = false) => {
+                    const li = document.createElement('li');
+                    li.className = \`page-item \${isActive ? 'active' : ''} \${isDisabled ? 'disabled' : ''}\`;
+                    li.innerHTML = \`<a class="page-link" href="#" data-page="\${page}">\${text}</a>\`;
+                    return li;
+                };
+                paginationEl.appendChild(createPageItem(currentPage - 1, '«', false, currentPage === 1));
+                for (let i = 1; i <= totalPages; i++) {
+                    paginationEl.appendChild(createPageItem(i, i, i === currentPage));
+                }
+                paginationEl.appendChild(createPageItem(currentPage + 1, '»', false, currentPage === totalPages));
+            }
+
+            breadcrumbEl.addEventListener('click', e => {
+                if (e.target.tagName === 'A' && e.target.dataset.path !== undefined) {
+                    e.preventDefault();
+                    currentRelativePath = e.target.dataset.path;
+                    currentPage = 1;
+                    loadGallery();
+                }
+            });
+
+            galleryEl.addEventListener('click', e => {
+                const card = e.target.closest('.card');
+                if (!card) return;
+
+                if (card.dataset.path !== undefined) { // Directory click
+                    currentRelativePath = card.dataset.path;
+                    currentPage = 1;
+                    loadGallery();
+                } else { // File click
+                    const previewBtn = e.target.closest('.preview-btn');
+                    if (previewBtn) {
+                        openPreview(previewBtn.dataset.url);
+                    }
+                }
+            });
+
+            paginationEl.addEventListener('click', e => {
+                if (e.target.tagName === 'A' && e.target.dataset.page) {
+                    e.preventDefault();
+                    const page = parseInt(e.target.dataset.page);
+                    if (page !== currentPage && page > 0 && !isNaN(page)) {
+                        currentPage = page;
+                        loadGallery();
+                    }
+                }
+            });
+
+            imagePreview.addEventListener('click', (e) => {
+                if (e.target === imagePreview) {
+                    closePreview();
+                }
+            });
+
+            previewCloseBtn.addEventListener('click', closePreview);
+            previewPrevBtn.addEventListener('click', showPrevImage);
+            previewNextBtn.addEventListener('click', showNextImage);
+
+            document.addEventListener('keydown', (e) => {
+                if (!imagePreview.classList.contains('show')) return;
+                if (e.key === 'ArrowLeft') showPrevImage();
+                if (e.key === 'ArrowRight') showNextImage();
+                if (e.key === 'Escape') closePreview();
+            });
+
+            function openPreview(imageUrl) {
+                currentImageIndex = currentImageList.indexOf(imageUrl);
+                if (currentImageIndex === -1) return;
+
+                previewImage.src = imageUrl;
+                imagePreview.classList.add('show');
+                updateNavButtons();
+            }
+
+            function closePreview() {
+                imagePreview.classList.remove('show');
+                previewImage.src = '';
+                currentImageIndex = -1;
+            }
+
+            function updateNavButtons() {
+                const hasMultipleImages = currentImageList.length > 1;
+                previewPrevBtn.style.display = hasMultipleImages ? 'block' : 'none';
+                previewNextBtn.style.display = hasMultipleImages ? 'block' : 'none';
+
+                if(hasMultipleImages) {
+                    previewPrevBtn.disabled = currentImageIndex === 0;
+                    previewNextBtn.disabled = currentImageIndex === currentImageList.length - 1;
+                }
+            }
+
+            function showPrevImage() {
+                if (currentImageIndex > 0) {
+                    currentImageIndex--;
+                    previewImage.src = currentImageList[currentImageIndex];
+                    updateNavButtons();
+                }
+            }
+
+            function showNextImage() {
+                if (currentImageIndex < currentImageList.length - 1) {
+                    currentImageIndex++;
+                    previewImage.src = currentImageList[currentImageIndex];
+                    updateNavButtons();
+                }
+            }
+
+            function formatFileSize(bytes) {
+                if (bytes < 1024) return bytes + ' B';
+                const i = Math.floor(Math.log(bytes) / Math.log(1024));
+                return \`\${(bytes / Math.pow(1024, i)).toFixed(2)} \${['B', 'KB', 'MB', 'GB'][i]}\`;
+            }
+
+            function showLoading(show) {
+                const DELAY = 100; // ms to wait before showing loader
+                const MIN_TIME = 350; // ms minimum display time for loader
+
+                if (show) {
+                    clearTimeout(loadingTimer); // Clear any pending hide timers
+                    loadingTimer = setTimeout(() => {
+                        loadingOverlay.classList.add('show');
+                        loadingStart = Date.now();
+                    }, DELAY);
+                } else {
+                    clearTimeout(loadingTimer); // Cancel showing the loader if it hasn't appeared yet
+                    if (loadingStart > 0) { // If the loader was shown
+                        const elapsed = Date.now() - loadingStart;
+                        const remaining = MIN_TIME - elapsed;
+                        if (remaining > 0) {
+                            setTimeout(() => {
+                                loadingOverlay.classList.remove('show');
+                                loadingStart = 0;
+                            }, remaining);
+                        } else {
+                            loadingOverlay.classList.remove('show');
+                            loadingStart = 0;
+                        }
+                    }
+                }
+            }
+
+            loadGallery();
+        });
+    </script>
+</body>
+</html>`;
+    return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 
 /**
@@ -1244,7 +1884,7 @@ async function handleWebUpload(request, bucket, baseUrl) {
 		if (!detectedType) {
 			return new Response(JSON.stringify({
 				success: false,
-				message: "Only JPG/PNG formats are supported"
+				message: "Only JPG/PNG/GIF/WEBP formats are supported"
 			}), {
 				status: 400,
 				headers: {'Content-Type': 'application/json'}
@@ -1296,106 +1936,15 @@ async function handleWebUpload(request, bucket, baseUrl) {
 }
 
 /**
- * 列出R2存储桶中的文件和目录
- * @param {Request} request - 传入的请求，可能包含prefix, page, pageSize等查询参数
+ * 列出R2存储桶中的文件和目录（管理页面使用）
+ * @param {Request} request - 传入的请求
  * @param {R2Bucket} bucket - R2存储桶实例
  * @param {string} BASE_URL - 用于构建公共URL的基础URL
  * @returns {Promise<Response>} - 包含文件和目录列表的JSON响应
  */
 async function handleListFiles(request, bucket, BASE_URL) {
-	try {
-		const url = new URL(request.url);
-		const prefix = url.searchParams.get('prefix') || '';
-		const delimiter = '/';
-
-		// 获取分页参数
-		const page = parseInt(url.searchParams.get('page') || '1', 10); // 默认为第1页
-		const pageSize = parseInt(url.searchParams.get('pageSize') || '50', 10); // 默认每页50项
-
-		// 列出对象
-		const listResult = await bucket.list({
-			prefix: prefix,
-			delimiter: delimiter
-		});
-
-		// 格式化目录 (commonPrefixes)
-		const directories = (listResult.delimitedPrefixes || []).map(delimitedPrefixes => {
-			const name = delimitedPrefixes.substring(prefix.length).replace(/\/$/, '');
-			return {
-				name: name,
-				path: delimitedPrefixes,
-				type: 'directory'
-			};
-		});
-
-		// 格式化文件 (objects)
-		const files = (listResult.objects || []).map(object => {
-			// 跳过代表当前目录的对象
-			if (object.key === prefix) {
-				return null;
-			}
-
-			// 从完整路径中提取文件名
-			const name = object.key.substring(prefix.length);
-			if (!name) return null; // 如果文件名为空则跳过
-
-			return {
-				name: name,
-				key: object.key,
-				size: object.size,
-				uploaded: object.uploaded,
-				type: 'file',
-				url: `${BASE_URL}/${encodeURIComponent(object.key)}`
-			};
-		}).filter(file => file !== null);
-
-		// 实现分页
-		const totalFiles = files.length;
-		const totalPages = Math.ceil(totalFiles / pageSize);
-
-		// 计算当前页的起始和结束索引
-		const startIndex = (page - 1) * pageSize;
-		const endIndex = Math.min(startIndex + pageSize, totalFiles);
-		const filesOnPage = files.slice(startIndex, endIndex);
-
-		// 计算父目录路径
-		let parentPath = '';
-		if (prefix) {
-			const parts = prefix.split('/');
-			parts.pop(); // 移除最后一个部分 (如果前缀以/结尾，则为空)
-			if (parts.length > 0) {
-				parts.pop(); // 移除目录名
-				parentPath = parts.join('/');
-				if (parentPath) parentPath += '/';
-			}
-		}
-
-		return new Response(JSON.stringify({
-			success: true,
-			currentPath: prefix,
-			parentPath: parentPath,
-			directories: directories,
-			files: filesOnPage,
-			pagination: {
-				currentPage: page,
-				pageSize: pageSize,
-				totalFiles: totalFiles,
-				totalPages: totalPages
-			}
-		}), {
-			headers: {'Content-Type': 'application/json'}
-		});
-
-	} catch (error) {
-		console.error('List files error:', error);
-		return new Response(JSON.stringify({
-			success: false,
-			message: 'Failed to list files'
-		}), {
-			status: 500,
-			headers: {'Content-Type': 'application/json'}
-		});
-	}
+    // 身份验证已由中间件处理
+    return listR2Files(request, bucket, BASE_URL);
 }
 
 /**
@@ -1494,6 +2043,119 @@ async function handleCreateFolder(request, bucket) {
 	}
 }
 
+// --- 新增分享功能处理函数 ---
+
+/**
+ * 处理创建新的分享链接的请求
+ * @param {Request} request 传入的请求
+ * @param {object} env 环境变量
+ * @returns {Promise<Response>}
+ */
+async function handleCreateShare(request, env) {
+    try {
+        const { path } = await request.json();
+        // 路径是必需的，但根路径 "" 是有效的
+        if (path === undefined || path === null) {
+            return new Response(JSON.stringify({ success: false, message: 'Path is required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        const shareId = generateRandomString(8);
+        await env.SHARES_KV.put(shareId, JSON.stringify({ path }));
+
+        const shareUrl = `${new URL(request.url).origin}/s/${shareId}`;
+
+        return new Response(JSON.stringify({ success: true, shareId, path, url: shareUrl }), { headers: { 'Content-Type': 'application/json' } });
+    } catch (error) {
+        console.error('Create share error:', error);
+        return new Response(JSON.stringify({ success: false, message: 'Failed to create share link' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+}
+
+/**
+ * 处理列出所有分享链接的请求
+ * @param {Request} request 传入的请求
+ * @param {object} env 环境变量
+ * @returns {Promise<Response>}
+ */
+async function handleListShares(request, env) {
+    try {
+        const listResult = await env.SHARES_KV.list();
+        const shares = [];
+
+        for (const key of listResult.keys) {
+            try {
+                const value = await env.SHARES_KV.get(key.name, 'json');
+                // 确保 value 不是 null 并且有 path 属性
+                if (value && typeof value.path !== 'undefined') {
+                    shares.push({
+                        shareId: key.name,
+                        path: value.path,
+                        url: `${new URL(request.url).origin}/s/${key.name}`
+                    });
+                } else {
+                    console.log(`Skipping malformed or null share key: ${key.name}`);
+                }
+            } catch (e) {
+                console.error(`Error parsing JSON for share key ${key.name}:`, e);
+            }
+        }
+
+        // 注意: 这个实现没有处理分页 (cursor). 如果分享链接超过1000个, 需要添加分页逻辑.
+        return new Response(JSON.stringify({ success: true, shares }), { headers: { 'Content-Type': 'application/json' } });
+    } catch (error) {
+        console.error('List shares error:', error);
+        return new Response(JSON.stringify({ success: false, message: 'Failed to list share links' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+}
+
+/**
+ * 处理删除分享链接的请求
+ * @param {Request} request 传入的请求
+ * @param {object} env 环境变量
+ * @returns {Promise<Response>}
+ */
+async function handleDeleteShare(request, env) {
+    try {
+        const { shareId } = await request.json();
+        if (!shareId) {
+            return new Response(JSON.stringify({ success: false, message: 'shareId is required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+        await env.SHARES_KV.delete(shareId);
+        return new Response(JSON.stringify({ success: true, message: 'Share link deleted' }), { headers: { 'Content-Type': 'application/json' } });
+    } catch (error) {
+        console.error('Delete share error:', error);
+        return new Response(JSON.stringify({ success: false, message: 'Failed to delete share link' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+}
+
+/**
+ * 列出公共分享链接中的文件和目录
+ * @param {Request} request 传入的请求
+ * @param {object} env 环境变量
+ * @param {object} params URL参数, e.g., { shareId }
+ * @returns {Promise<Response>}
+ */
+async function handleListSharedFiles(request, env, params) {
+    try {
+        const { shareId } = params;
+        const shareData = await env.SHARES_KV.get(shareId, 'json');
+
+        if (!shareData) {
+            return new Response(JSON.stringify({ success: false, message: 'Share link not found or expired' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        const url = new URL(request.url);
+        const requestPrefix = url.searchParams.get('prefix') || '';
+        const fullPrefix = shareData.path + requestPrefix;
+
+        return listR2Files(request, env.BUCKET_R2, env.BASE_URL, fullPrefix);
+    } catch (error) {
+        console.error('List shared files error:', error);
+        return new Response(JSON.stringify({ success: false, message: 'Failed to list files' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+}
+
+// --- 辅助函数 ---
 
 /**
  * 从URL下载图片并上传到R2
@@ -1517,7 +2179,7 @@ async function uploadImageToR2(imageUrl, bucket, isDocument = false, userPath = 
 			return {
 				ok: false,
 				error: 'UNSUPPORTED_TYPE',
-				message: '只支持 JPG/PNG 格式文件'
+				message: '只支持 JPG/PNG/GIF/WEBP 格式文件'
 			};
 		}
 		const date = new Date();
@@ -1605,4 +2267,93 @@ async function sendPhoto(chatId, photoUrl, apiUrl, caption = "", options = {}) {
 		}),
 	});
 	return await response.json();
+}
+
+/**
+ * 生成指定长度的随机字符串
+ * @param {number} length 字符串长度
+ * @returns {string}
+ */
+function generateRandomString(length) {
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    const charactersLength = characters.length;
+    for (let i = 0; i < length; i++) {
+        result += characters.charAt(Math.floor(Math.random() * charactersLength));
+    }
+    return result;
+}
+
+/**
+ * 通用的R2文件列表函数
+ * @param {Request} request 传入的请求
+ * @param {R2Bucket} bucket R2存储桶实例
+ * @param {string} BASE_URL 用于构建公共URL的基础URL
+ * @param {string|null} forcePrefix 强制使用的前缀，忽略URL参数
+ * @returns {Promise<Response>}
+ */
+async function listR2Files(request, bucket, BASE_URL, forcePrefix = null) {
+    try {
+        const url = new URL(request.url);
+        const prefix = forcePrefix !== null ? forcePrefix : (url.searchParams.get('prefix') || '');
+        const delimiter = '/';
+
+        const page = parseInt(url.searchParams.get('page') || '1', 10);
+        const pageSize = parseInt(url.searchParams.get('pageSize') || '50', 10);
+
+        const listResult = await bucket.list({
+            prefix: prefix,
+            delimiter: delimiter,
+        });
+
+        const directories = (listResult.delimitedPrefixes || []).map(delimitedPrefix => {
+            const name = delimitedPrefix.substring(prefix.length).replace(/\/$/, '');
+            return { name, path: delimitedPrefix, type: 'directory' };
+        });
+
+        const files = (listResult.objects || []).map(object => {
+            if (object.key === prefix) return null;
+            const name = object.key.substring(prefix.length);
+            if (!name) return null;
+            return {
+                name,
+                key: object.key,
+                size: object.size,
+                uploaded: object.uploaded,
+                type: 'file',
+                url: `${BASE_URL}/${encodeURIComponent(object.key)}`
+            };
+        }).filter(Boolean);
+
+        const totalFiles = files.length;
+        const totalPages = Math.ceil(totalFiles / pageSize);
+        const startIndex = (page - 1) * pageSize;
+        const filesOnPage = files.slice(startIndex, startIndex + pageSize);
+
+        let parentPath = '';
+        if (prefix) {
+            const parts = prefix.replace(/\/$/, '').split('/');
+            parts.pop();
+            parentPath = parts.join('/');
+            if (parentPath) parentPath += '/';
+        }
+
+        return new Response(JSON.stringify({
+            success: true,
+            currentPath: prefix,
+            parentPath: parentPath,
+            directories: directories,
+            files: filesOnPage,
+            pagination: {
+                currentPage: page,
+                pageSize: pageSize,
+                totalFiles: totalFiles,
+                totalPages: totalPages
+            }
+        }), { headers: { 'Content-Type': 'application/json' } });
+
+    } catch (error) {
+        console.error('List files error:', error);
+        return new Response(JSON.stringify({ success: false, message: 'Failed to list files' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
 }
