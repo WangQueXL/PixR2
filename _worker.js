@@ -103,7 +103,7 @@ export default {
         if (path.startsWith('/s/')) {
             const shareId = path.substring(3);
             // 新增 ShareId 校验
-            if (!shareId || shareId.length < 8) { // KV 里是8位，确保长度匹配
+            if (!shareId || shareId.length < 16) { // KV 里是16位，确保长度匹配
                 return new Response('Not found', { status: 404 });
             }
             return serveSharePage(shareId);
@@ -113,7 +113,7 @@ export default {
             const parts = path.substring(7).split('/'); // 移除 /api/s/
             const shareId = parts[0];
             // 新增 ShareId 校验
-            if (!shareId || shareId.length < 8) { // 确保 shareId 有效
+            if (!shareId || shareId.length < 16) { // 确保 shareId 有效
                 return new Response('Not found', { status: 404 });
             }
             // 确保 parts[1] 存在且是 'list'
@@ -186,7 +186,7 @@ function serveErrorPage(missingEnvVars) {
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>R2管理 - 配置错误</title>
+            <title>PixR2 - 配置错误</title>
             <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.7/css/bootstrap.min.css" rel="stylesheet">
             <style>
                 body { display: flex; align-items: center; justify-content: center; min-height: 100vh; background-color: #f8f9fa; }
@@ -330,25 +330,29 @@ async function handleTelegramWebhook(request, env) {
 		}
 
 		// 处理媒体文件上传的函数
-		async function handleMediaUpload(chatId, fileId, isDocument = false) {
+		async function handleMediaUpload(chatId, fileId, messageId, isDocument = false) {
 			try {
-				// 发送提示消息
-				await sendMessage(chatId, '收到文件，正在上传ing', `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
-
 				const fileUrl = await getFileUrl(fileId, env.TELEGRAM_BOT_TOKEN);
 				const userPath = await getUserPath(chatId);
 				const uploadResult = await uploadImageToR2(fileUrl, env.BUCKET_R2, isDocument, userPath, env.BASE_URL);
 
 				if (uploadResult.ok) {
 					const imageUrl = `${env.BASE_URL}/${uploadResult.key}`;
-					const caption = `✅ 图片上传成功！\n直链\n<code>${imageUrl}</code>\nMarkdown\n<code>![img](${imageUrl})</code>`;
-					await sendPhoto(chatId, imageUrl, `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`, caption, {parse_mode: "HTML"});
+					const messageText = `直链:\n<code>${imageUrl}</code>\nMarkdown:\n<code>![img](${imageUrl})</code>`;
+					await sendMessage(chatId, messageText, `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`, {
+						parse_mode: "HTML",
+						reply_to_message_id: messageId
+					});
 				} else {
-					await sendMessage(chatId, uploadResult.message, `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
+					await sendMessage(chatId, uploadResult.message, `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`, {
+						reply_to_message_id: messageId
+					});
 				}
 			} catch (error) {
 				console.error('处理文件失败:', error);
-				await sendMessage(chatId, '文件处理失败，请稍后再试。', `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
+				await sendMessage(chatId, '文件处理失败，请稍后再试。', `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`, {
+					reply_to_message_id: messageId
+				});
 			}
 		}
 
@@ -395,7 +399,7 @@ async function handleTelegramWebhook(request, env) {
 				return new Response('OK');
 			}
 
-			await handleMediaUpload(chatId, doc.file_id, true);
+			await handleMediaUpload(chatId, doc.file_id, update.message.message_id, true);
 			return new Response('OK');
 		}
 
@@ -403,7 +407,7 @@ async function handleTelegramWebhook(request, env) {
 		if (update.message.photo) {
 			// Telegram会发送多个尺寸的图片，选择最大尺寸的
 			const fileId = update.message.photo.slice(-1)[0].file_id;
-			await handleMediaUpload(chatId, fileId);
+			await handleMediaUpload(chatId, fileId, update.message.message_id);
 			return new Response('OK');
 		}
 
@@ -493,7 +497,7 @@ function serveLoginPage(errorMessage = null) {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>R2管理 - 登录</title>
+        <title>PixR2 - 登录</title>
         <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.7/css/bootstrap.min.css" rel="stylesheet">
         <style>
             body {
@@ -529,7 +533,7 @@ function serveLoginPage(errorMessage = null) {
         <main class="form-signin">
             <div class="card shadow-sm">
                 <div class="card-body p-5">
-                    <h1 class="h3 mb-4 fw-normal">R2管理</h1>
+                    <h1 class="h3 mb-4 fw-normal">PixR2</h1>
                     <form action="/login" method="post">
                         <div class="form-floating mb-3">
                             <input type="password" class="form-control" id="floatingPassword" name="key" placeholder="访问密钥"
@@ -562,7 +566,7 @@ function serveUploadPage() {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>R2管理 - 上传</title>
+        <title>PixR2 - 上传</title>
         <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.7/css/bootstrap.min.css" rel="stylesheet">
         <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.13.1/font/bootstrap-icons.min.css">
         <style>
@@ -596,7 +600,7 @@ function serveUploadPage() {
         <header>
             <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm">
                 <div class="container">
-                    <a class="navbar-brand fw-bold" href="#">R2管理</a>
+                    <a class="navbar-brand fw-bold" href="https://github.com/WangQueXL/PixR2">PixR2</a>
                     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
                         <span class="navbar-toggler-icon"></span>
                     </button>
@@ -806,7 +810,7 @@ function serveGalleryPage() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2管理 - 图库</title>
+    <title>PixR2 - 图库</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.7/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.13.1/font/bootstrap-icons.min.css">
     <style>
@@ -901,7 +905,7 @@ function serveGalleryPage() {
     <header>
       <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm">
         <div class="container">
-          <a class="navbar-brand fw-bold" href="#">R2管理</a>
+          <a class="navbar-brand fw-bold" href="https://github.com/WangQueXL/PixR2">PixR2</a>
   
           <!-- 移动端折叠按钮 -->
           <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarButtons" aria-controls="navbarButtons" aria-expanded="false" aria-label="切换导航">
@@ -1115,6 +1119,9 @@ function serveGalleryPage() {
                     e.preventDefault();
                     currentPath = e.target.dataset.path;
                     currentPage = 1;
+                    const url = new URL(window.location);
+                    url.searchParams.delete('page');
+                    window.history.pushState({}, '', url);
                     loadGallery();
                 }
             });
@@ -1496,7 +1503,7 @@ function serveSharePage(shareId) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>R2分享 - 浏览</title>
+    <title>PixR2 - 分享</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.7/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.13.1/font/bootstrap-icons.min.css">
     <style>
@@ -1546,7 +1553,7 @@ function serveSharePage(shareId) {
     <header>
         <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm">
             <div class="container">
-                <a class="navbar-brand fw-bold" href="#">R2分享</a>
+                <a class="navbar-brand fw-bold" href="https://github.com/WangQueXL/PixR2">PixR2</a>
             </div>
         </nav>
     </header>
@@ -2059,7 +2066,7 @@ async function handleCreateShare(request, env) {
             return new Response(JSON.stringify({ success: false, message: 'Path is required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
         }
 
-        const shareId = generateRandomString(8);
+        const shareId = generateRandomString(16);
         await env.SHARES_KV.put(shareId, JSON.stringify({ path }));
 
         const shareUrl = `${new URL(request.url).origin}/s/${shareId}`;
