@@ -26,7 +26,7 @@ PixR2 是一个 **无服务器部署（Serverless）** 的在线图床，基于 
 </p>
 
 <p align="left">
-<img src="docs/screenshot/4.jpg" width="9%" />
+<img src="docs/screenshot/4.jpg" width="8%" />
 <img src="docs/screenshot/5.png" width="29%" />
 <img src="docs/screenshot/6.png" width="29%" />
 <img src="docs/screenshot/7.png" width="29%" />
