@@ -94,6 +94,17 @@ export default {
 		if (missingEnvVars.length > 0) {
 			return serveErrorPage(missingEnvVars);
 		}
+        
+        // --- BASE_URL 格式化 ---
+		// 自动为 BASE_URL 添加 https:// 并移除末尾的 /
+		if (env.BASE_URL.startsWith('http://')) {
+			env.BASE_URL = env.BASE_URL.replace('http://', 'https://');
+		} else if (!env.BASE_URL.startsWith('https://')) {
+			env.BASE_URL = 'https://' + env.BASE_URL;
+		}
+		if (env.BASE_URL.endsWith('/')) {
+			env.BASE_URL = env.BASE_URL.slice(0, -1);
+		}
 
         const url = new URL(request.url);
         const path = url.pathname;
