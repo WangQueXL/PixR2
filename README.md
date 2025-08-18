@@ -1,5 +1,5 @@
 <div align="center">
-    <a href="https://github.com/WangQueXL/PixR2"><img width="20%" src="docs/screenshot/logo.png"/></a>
+    <a href="https://github.com/WangQueXL/PixR2"><img width="15%" src="docs/screenshot/logo.png"/></a>
     <h1>PixR2</h1>
     <p>基于 Cloudflare Workers + R2 的多入口图床与图片管理平台</p>
 </div>
