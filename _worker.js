@@ -1174,7 +1174,7 @@ function serveGalleryPage() {
                                <input type="checkbox" class="form-check-input checkbox position-absolute top-0 end-0 m-2">
                                \${item.name === '.null' 
                                    ? '<div class="card-body text-center d-flex flex-column justify-content-center align-items-center"><i class="bi bi-file-earmark-binary fs-1"></i></div>'
-                                   : \`<img src="\${item.url}" class="card-img-top file-image w-100 h-100 object-fit-cover" alt="\${item.name}">\`
+                                   : \`<img data-src="\${item.url}" class="card-img-top file-image w-100 h-100 object-fit-cover lazyload" alt="\${item.name}" loading="lazy">\`
                                }
                                <div class="card-footer text-body-secondary small">
                                    <div class="d-flex justify-content-between align-items-center">
@@ -1190,8 +1190,27 @@ function serveGalleryPage() {
                     }
                     galleryEl.appendChild(col);
                 });
+                observeLazyLoad();
             }
             
+            function observeLazyLoad() {
+               const lazyImages = document.querySelectorAll('.lazyload');
+               const imageObserver = new IntersectionObserver((entries, observer) => {
+                   entries.forEach(entry => {
+                       if (entry.isIntersecting) {
+                           const image = entry.target;
+                           image.src = image.dataset.src;
+                           image.classList.remove('lazyload');
+                           observer.unobserve(image);
+                       }
+                   });
+               });
+
+               lazyImages.forEach(image => {
+                   imageObserver.observe(image);
+               });
+           }
+
             galleryEl.addEventListener('click', e => {
                 const itemEl = e.target.closest('.item');
                 if (!itemEl) return;
@@ -1698,7 +1717,7 @@ function serveSharePage(shareId) {
                            <div class="card h-100">
                                \${item.name === '.null' 
                                    ? '<div class="card-body text-center d-flex flex-column justify-content-center align-items-center"><i class="bi bi-file-earmark-binary fs-1"></i></div>'
-                                   : \`<img src="\${item.url}" class="card-img-top file-image w-100 h-100 object-fit-cover" alt="\${item.name}">\`
+                                   : \`<img data-src="\${item.url}" class="card-img-top file-image w-100 h-100 object-fit-cover lazyload" alt="\${item.name}" loading="lazy">\`
                                }
                                <div class="card-footer text-body-secondary small">
                                    <div class="d-flex justify-content-between align-items-center">
@@ -1714,7 +1733,26 @@ function serveSharePage(shareId) {
                     }
                     galleryEl.appendChild(col);
                 });
+                observeLazyLoad();
             }
+
+           function observeLazyLoad() {
+               const lazyImages = document.querySelectorAll('.lazyload');
+               const imageObserver = new IntersectionObserver((entries, observer) => {
+                   entries.forEach(entry => {
+                       if (entry.isIntersecting) {
+                           const image = entry.target;
+                           image.src = image.dataset.src;
+                           image.classList.remove('lazyload');
+                           observer.unobserve(image);
+                       }
+                   });
+               });
+
+               lazyImages.forEach(image => {
+                   imageObserver.observe(image);
+               });
+           }
 
             function renderPagination({ totalPages }) {
                 paginationEl.innerHTML = '';
