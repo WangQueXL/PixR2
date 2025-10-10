@@ -33,22 +33,22 @@ PixR2 是一个 **无服务器部署（Serverless）** 的在线图床，基于 
 </p>
 
 
-## Worker 部署教程
+## Workers 部署教程
 
 ### 0. 准备工作  
-- 你需要准备一个域名，一个 Telegram Bot 以及 ChatID  
+- 你需要准备一个域名，一个 Telegram Bot 以及 Chat ID 
 - 不知道如何获取可以点击[此处](docs/tutorial/bot.jpeg)查看教程  
 
 ### 1. 创建 KV 与 R2 存储桶  
-- 在 Cloudflare 侧边栏中找到 **存储与数据库**  
+- 在 Cloudflare 侧边栏中找到 **存储与数据库**
+- 找到 **Workers KV** 与 **R2 对象存储** 
 - 创建一个任意名称的 KV 命名空间  
-- 在 Cloudflare 侧边栏中找到 **R2 对象存储**  
 - 创建一个任意名称的 R2 存储桶  
-- 进入刚刚创建的存储桶，点击 **设置** -> **自定义域**，为你的存储桶添加自定义域  
 
 ### 2. 上传代码部署  
-- 在 Cloudflare 侧边栏找到 **计算（Workers）**  
-- 创建一个新的 Worker，选择从 **Hello World!** 模板开始  
+- 在 Cloudflare 侧边栏找到 **计算和 AI**
+- 选择 **Workers 和 Pages**
+- 创建一个新的 Worker，选择 **从 Hello World! 模板开始** 
 - 填写一个喜欢的名字并部署  
 - 点击右上角的 **编辑代码**，将 [_worker.js](_worker.js) 文件内容粘贴进去并保存部署  
 - 返回 Worker 项目，点击 **绑定** -> **添加绑定**  
@@ -60,11 +60,10 @@ PixR2 是一个 **无服务器部署（Serverless）** 的在线图床，基于 
 | 变量名           | 说明                              |
 |------------------|---------------------------------|
 | SECRET_KEY       | Web 面板密码                     |
-| TELEGRAM_BOT_TOKEN | Telegram Bot Token              |
+| TELEGRAM_BOT_TOKEN | Telegram 机器人 Token              |
 | CHAT_ID          | 允许使用机器人的用户 ID，多个用逗号分隔 |
-| BASE_URL         | R2 存储桶自定义域                |
 
-- 最后在 **域和路由** 为你的 Worker 项目添加自定义域  
+- 最后在 **域和路由** 为你的 Workers 项目添加自定义域  
 - 访问 `https://<你的自定义域>/setWebhook` 完成 Telegram Webhook 设置  
 - 现在可以通过 Telegram Bot 和 Web 面板开始使用了  
 - 在 Telegram 里发送任意消息即可获得 Bot 指令帮助  
