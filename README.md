@@ -36,14 +36,13 @@ PixR2 是一个 **无服务器部署（Serverless）** 的在线图床，基于 
 ## Workers 部署教程
 
 ### 0. 准备工作  
-- 你需要准备一个域名，一个 Telegram Bot 以及 Chat ID 
+- 你需要准备一个域名，一个 Telegram Bot 以及自己的 UserID （用来限制哪些用户可以使用机器人）
 - 不知道如何获取可以点击[此处](docs/tutorial/bot.jpeg)查看教程  
 
 ### 1. 创建 KV 与 R2 存储桶  
 - 在 Cloudflare 侧边栏中找到 **存储与数据库**
 - 找到 **Workers KV** 与 **R2 对象存储** 
-- 创建一个任意名称的 KV 命名空间  
-- 创建一个任意名称的 R2 存储桶  
+- 创建一个任意名称的 KV 命名空间 以及 R2 存储桶 
 
 ### 2. 上传代码部署  
 - 在 Cloudflare 侧边栏找到 **计算和 AI**
@@ -59,18 +58,18 @@ PixR2 是一个 **无服务器部署（Serverless）** 的在线图床，基于 
 
 | 变量名           | 说明                              |
 |------------------|---------------------------------|
-| SECRET_KEY       | Web 面板密码                     |
-| TELEGRAM_BOT_TOKEN | Telegram 机器人 Token              |
-| CHAT_ID          | 允许使用机器人的用户 ID，多个用逗号分隔 |
+| SECRET_KEY       | Web 面板登陆密码（请不要使用弱密码） |
+| TELEGRAM_BOT_TOKEN | Telegram 机器人 Token |
+| CHAT_ID          | 允许使用此机器人的 Telegram 用户 ID（这是一个纯数字），多个用户使用逗号分隔 |
 
 - 最后在 **域和路由** 为你的 Workers 项目添加自定义域  
-- 访问 `https://<你的自定义域>/setWebhook` 完成 Telegram Webhook 设置  
-- 现在可以通过 Telegram Bot 和 Web 面板开始使用了  
+- 访问 `https://<你的自定义域>/setWebhook` 激活 Telegram Webhook  
+- 现在就可以通过 Telegram Bot 和 Web 面板开始使用了  
 - 在 Telegram 里发送任意消息即可获得 Bot 指令帮助  
 
 
 ## 其他
 
-> 本项目受 [cloudflare-r2-telegram-bot](https://github.com/xinycai/cloudflare-r2-telegram-bot) 启发而来
+> 本项目基于 [cloudflare-r2-telegram-bot](https://github.com/xinycai/cloudflare-r2-telegram-bot) 二次开发
 
 采用 MIT 许可协议，详见 LICENSE 文件
