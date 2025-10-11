@@ -92,9 +92,13 @@ export default {
 
         // --- 环境变量检查 ---
         // 定义所有必需的环境变量
-        const requiredEnvVars = ['SECRET_KEY', 'TELEGRAM_BOT_TOKEN', 'CHAT_ID', 'BUCKET_R2', 'SHARES_KV', 'INDEXES_KV'];
-        // 筛选出缺失的环境变量
+        const requiredEnvVars = ['SECRET_KEY', 'TELEGRAM_BOT_TOKEN', 'BUCKET_R2', 'SHARES_KV', 'INDEXES_KV'];
         const missingEnvVars = requiredEnvVars.filter(key => !env[key]);
+
+        // 检查 USER_ID 或 CHAT_ID 是否存在
+        if (!env.USER_ID && !env.CHAT_ID) {
+            missingEnvVars.push('USER_ID');
+        }
 
         // 如果有任何环境变量缺失，则返回一个错误页面
         if (missingEnvVars.length > 0) {
@@ -336,9 +340,11 @@ async function handleTelegramWebhook(request, env) {
 
         const chatId = update.message.chat.id;
 
-        // 检查用户是否已授权 (CHAT_ID环境变量中是否包含该用户的ID)
-        if (!env.CHAT_ID.split(',').includes(chatId.toString())) {
-            return new Response('Unauthorized access', { status: 403 });
+        // 检查用户是否已授权 (USER_ID/CHAT_ID环境变量中是否包含该用户的ID)
+        const allowedChatIds = (env.USER_ID || env.CHAT_ID).split(',');
+        if (!allowedChatIds.includes(chatId.toString())) {
+            await sendMessage(chatId, '用户未授权！', `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`);
+            return new Response('OK');
         }
 
         // 获取用户当前上传路径的函数
