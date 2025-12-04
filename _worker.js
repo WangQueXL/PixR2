@@ -92,12 +92,18 @@ export default {
 
         // --- 环境变量检查 ---
         // 定义所有必需的环境变量
-        const requiredEnvVars = ['SECRET_KEY', 'TELEGRAM_BOT_TOKEN', 'BUCKET_R2', 'SHARES_KV', 'INDEXES_KV'];
+        let requiredEnvVars = ['SECRET_KEY', 'BUCKET_R2', 'SHARES_KV', 'INDEXES_KV'];
+        
+        // 如果启用了Telegram Bot，则添加相关环境变量为必需
+        if (env.ENABLE_TELEGRAM_BOT === 'true') {
+            requiredEnvVars.push('TELEGRAM_BOT_TOKEN');
+        }
+
         const missingEnvVars = requiredEnvVars.filter(key => !env[key]);
 
-        // 检查 USER_ID 或 CHAT_ID 是否存在
-        if (!env.USER_ID && !env.CHAT_ID) {
-            missingEnvVars.push('USER_ID');
+        // 如果启用了Telegram Bot，则检查 USER_ID 或 CHAT_ID 是否存在
+        if (env.ENABLE_TELEGRAM_BOT === 'true' && !env.USER_ID && !env.CHAT_ID) {
+            missingEnvVars.push('USER_ID or CHAT_ID');
         }
 
         // 如果有任何环境变量缺失，则返回一个错误页面
@@ -176,20 +182,26 @@ export default {
         router.post('/api/share/create', requireAuth(handleCreateShare));
         router.get('/api/share/list', requireAuth(handleListShares));
         router.post('/api/share/delete', requireAuth(handleDeleteShare));
+        // 文件操作（移动/复制）和目录列表路由
+        router.post('/api/files/action', requireAuth((req, env) => handleFileAction(req, env.BUCKET_R2)));
+        router.get('/api/directories', requireAuth((req, env) => handleListDirectories(req, env.BUCKET_R2)));
 
-        // Telegram机器人路由
-        router.post('/webhook', (req) => handleTelegramWebhook(req, env)); // 处理Telegram的webhook更新
-        // 设置Telegram webhook的辅助路由
-        router.get('/setWebhook', async (req) => {
-            const url = new URL(req.url);
-            const webhookUrl = `${url.protocol}//${url.host}/webhook`;
-            const TELEGRAM_API_URL = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
-            const webhookResponse = await setWebhook(webhookUrl, TELEGRAM_API_URL);
-            if (webhookResponse.ok) {
-                return new Response(`Webhook set successfully to ${webhookUrl}`);
-            }
-            return new Response('Failed to set webhook', { status: 500 });
-        });
+        // 如果启用了Telegram Bot，则注册相关路由
+        if (env.ENABLE_TELEGRAM_BOT === 'true') {
+            // Telegram机器人路由
+            router.post('/webhook', (req) => handleTelegramWebhook(req, env)); // 处理Telegram的webhook更新
+            // 设置Telegram webhook的辅助路由
+            router.get('/setWebhook', async (req) => {
+                const url = new URL(req.url);
+                const webhookUrl = `${url.protocol}//${url.host}/webhook`;
+                const TELEGRAM_API_URL = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
+                const webhookResponse = await setWebhook(webhookUrl, TELEGRAM_API_URL);
+                if (webhookResponse.ok) {
+                    return new Response(`Webhook set successfully to ${webhookUrl}`);
+                }
+                return new Response('Failed to set webhook', { status: 500 });
+            });
+        }
 
         // --- 处理请求 ---
         try {
@@ -197,7 +209,6 @@ export default {
             return await router.handle(request, env);
         } catch (err) {
             console.error(err);
-            // 在生产环境中，你可能希望提供一个更友好的错误页面
             return new Response('Server error: ' + err.message, { status: 500 });
         }
     }
@@ -493,7 +504,6 @@ async function handleLogin(request, secretKey) {
 
 /**
  * 对密钥进行简单的哈希处理（Base64编码）
- * 注意：这只是一个示例，生产环境应使用更安全的哈希算法
  * @param {string} key - 要哈希的字符串
  * @returns {string} - 哈希后的字符串
  */
@@ -947,11 +957,38 @@ function serveGalleryPage() {
           <!-- 按钮区 -->
           <div class="collapse navbar-collapse justify-content-end" id="navbarButtons">
             <div class="d-flex flex-lg-row flex-column align-items-lg-center pt-2 pt-lg-0">
-              <a href="/upload" class="btn btn-primary me-lg-2 mb-2 mb-lg-0">上传图片</a>
-              <button id="newFolderBtn" class="btn btn-outline-secondary me-lg-2 mb-2 mb-lg-0">新建文件夹</button>
-              <button id="shareFolderBtn" class="btn btn-outline-secondary me-lg-2 mb-2 mb-lg-0">分享文件夹</button>
-              <button id="manageSharesBtn" class="btn btn-outline-secondary me-lg-2 mb-2 mb-lg-0">管理分享</button>
-              <button id="deleteBtn" class="btn btn-danger" disabled>删除所选</button>
+                <a href="/upload" class="btn btn-primary me-lg-2 mb-2 mb-lg-0">
+                    <i class="bi bi-upload me-1"></i>上传图片
+                </a>
+                <button id="newFolderBtn" class="btn btn-outline-secondary me-lg-2 mb-2 mb-lg-0">
+                    <i class="bi bi-folder-plus me-1"></i>新建文件夹
+                </button>
+
+                <!-- Share Dropdown -->
+                <div class="btn-group me-lg-2 mb-2 mb-lg-0">
+                    <button type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-share me-1"></i>分享
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><button id="shareFolderBtn" class="dropdown-item" type="button">分享当前文件夹</button></li>
+                        <li><button id="manageSharesBtn" class="dropdown-item" type="button">管理所有分享</button></li>
+                    </ul>
+                </div>
+
+                <!-- File Actions Dropdown -->
+                <div class="btn-group me-lg-2 mb-2 mb-lg-0">
+                    <button type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" id="actionsDropdown" disabled>
+                        <i class="bi bi-pencil-square me-1"></i>操作
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><button id="moveBtn" class="dropdown-item" type="button">移动到...</button></li>
+                        <li><button id="copyBtn" class="dropdown-item" type="button">复制到...</button></li>
+                    </ul>
+                </div>
+
+                <button id="deleteBtn" class="btn btn-danger" disabled>
+                    <i class="bi bi-trash me-1"></i>删除
+                </button>
             </div>
           </div>
         </div>
@@ -994,6 +1031,28 @@ function serveGalleryPage() {
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
                     <button type="button" id="createFolderBtn" class="btn btn-primary">创建</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="moveCopyModal" tabindex="-1" aria-labelledby="moveCopyModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="moveCopyModalLabel">选择目标文件夹</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="directoryTree" class="list-group" style="max-height: 300px; overflow-y: auto;"></div>
+                    <div class="input-group mt-3">
+                        <input type="text" id="newFolderNameInModal" class="form-control" placeholder="在此创建新文件夹">
+                        <button class="btn btn-outline-secondary" type="button" id="createFolderInModalBtn">创建</button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" id="confirmMoveCopyBtn" class="btn btn-primary" disabled>移动到此处</button>
                 </div>
             </div>
         </div>
@@ -1091,7 +1150,10 @@ function serveGalleryPage() {
             const notificationToast = new bootstrap.Toast(document.getElementById('notification'));
             const shareCreatedModal = new bootstrap.Modal(document.getElementById('shareCreatedModal'));
             const manageSharesModal = new bootstrap.Modal(document.getElementById('manageSharesModal'));
+            const moveCopyModal = new bootstrap.Modal(document.getElementById('moveCopyModal'));
             const sharesListEl = document.getElementById('sharesList');
+            
+            let currentAction = ''; // 'move' or 'copy'
 
             const urlParams = new URLSearchParams(window.location.search);
             currentPage = parseInt(urlParams.get('page')) || 1;
@@ -1309,7 +1371,9 @@ function serveGalleryPage() {
 
             function updateControls() {
                 const numFiles = galleryEl.querySelectorAll('.item[data-key]').length;
-                deleteBtn.disabled = selectedItems.length === 0;
+                const hasSelection = selectedItems.length > 0;
+                deleteBtn.disabled = !hasSelection;
+                document.getElementById('actionsDropdown').disabled = !hasSelection;
                 selectAllCheckbox.checked = numFiles > 0 && selectedItems.length === numFiles;
                 selectAllCheckbox.indeterminate = selectedItems.length > 0 && selectedItems.length < numFiles;
             }
@@ -1426,6 +1490,141 @@ function serveGalleryPage() {
                         }
                     }
                 }
+            });
+
+            let selectedDestination = null;
+
+            function setupMoveCopy(action) {
+                currentAction = action;
+                const confirmBtn = document.getElementById('confirmMoveCopyBtn');
+                confirmBtn.textContent = action === 'move' ? '移动到此处' : '复制到此处';
+                selectedDestination = null;
+                confirmBtn.disabled = true;
+                loadDirectoryTree();
+                moveCopyModal.show();
+            }
+
+            async function loadDirectoryTree() {
+                const treeContainer = document.getElementById('directoryTree');
+                treeContainer.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div></div>';
+                const data = await apiCall('/api/directories');
+                if (data.success) {
+                    renderDirectoryTree(data.directories, treeContainer);
+                } else {
+                    treeContainer.innerHTML = '<p class="text-danger">无法加载目录</p>';
+                }
+            }
+
+            function renderDirectoryTree(nodes, container) {
+                container.innerHTML = '';
+
+                const buildTree = (parentPath, parentElement, level) => {
+                    const children = nodes.filter(n => n.parent === parentPath);
+                    
+                    children.forEach(node => {
+                        const hasChildren = nodes.some(n => n.parent === node.path);
+                        
+                        const item = document.createElement('a');
+                        item.href = '#';
+                        item.className = 'list-group-item list-group-item-action';
+                        item.dataset.path = node.path;
+                        item.style.paddingLeft = (1.25 + level * 1.5) + 'rem';
+
+                        let togglerHtml = '';
+                        
+                        if (hasChildren) {
+                            const targetId = 'tree-' + node.path.replace(/[^a-zA-Z0-9]/g, '-');
+                            item.setAttribute('data-bs-toggle', 'collapse');
+                            item.setAttribute('data-bs-target', '#' + targetId);
+                            togglerHtml = '<i class="bi bi-chevron-right me-2 toggle-icon"></i>';
+                        } else {
+                            togglerHtml = '<span class="me-2" style="width: 1em; display: inline-block;"></span>';
+                        }
+
+                        item.innerHTML = togglerHtml + '<i class="bi bi-folder me-2"></i> ' + node.name;
+                        parentElement.appendChild(item);
+
+                        if (hasChildren) {
+                            const subContainer = document.createElement('div');
+                            subContainer.className = 'collapse';
+                            subContainer.id = 'tree-' + node.path.replace(/[^a-zA-Z0-9]/g, '-');
+                            buildTree(node.path, subContainer, level + 1);
+                            parentElement.appendChild(subContainer);
+                        }
+                    });
+                };
+
+                const rootItem = document.createElement('a');
+                rootItem.href = '#';
+                rootItem.className = 'list-group-item list-group-item-action';
+                rootItem.dataset.path = '/';
+                rootItem.innerHTML = '<i class="bi bi-folder-fill me-2"></i> 根目录';
+                container.appendChild(rootItem);
+
+                buildTree('/', container, 0);
+            }
+
+            document.getElementById('directoryTree').addEventListener('click', (e) => {
+                e.preventDefault();
+                const target = e.target.closest('.list-group-item');
+                if (target) {
+                    document.querySelectorAll('#directoryTree .list-group-item').forEach(i => i.classList.remove('active'));
+                    target.classList.add('active');
+                    selectedDestination = target.dataset.path;
+                    document.getElementById('confirmMoveCopyBtn').disabled = false;
+
+                    const icon = target.querySelector('.toggle-icon');
+                    if (icon) {
+                        icon.classList.toggle('bi-chevron-right');
+                        icon.classList.toggle('bi-chevron-down');
+                    }
+                }
+            });
+
+            document.getElementById('createFolderInModalBtn').addEventListener('click', async () => {
+                const newNameInput = document.getElementById('newFolderNameInModal');
+                const folderName = newNameInput.value.trim();
+                if (!folderName || !selectedDestination) {
+                    showNotification('请先选择一个父目录并输入文件夹名称', 'danger');
+                    return;
+                }
+                const path = (selectedDestination === '/' ? '' : selectedDestination) + folderName + '/';
+                const result = await apiCall('/api/create-folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path })
+                });
+                if (result.success) {
+                    showNotification('文件夹创建成功', 'success');
+                    newNameInput.value = '';
+                    await loadDirectoryTree();
+                    // Reselect the parent after reload
+                    const parentItem = document.querySelector('#directoryTree [data-path="' + selectedDestination + '"]');
+                    if(parentItem) parentItem.click();
+                }
+            });
+
+            document.getElementById('moveBtn').addEventListener('click', () => setupMoveCopy('move'));
+            document.getElementById('copyBtn').addEventListener('click', () => setupMoveCopy('copy'));
+
+            document.getElementById('confirmMoveCopyBtn').addEventListener('click', async () => {
+                if (selectedItems.length === 0 || selectedDestination === null) return;
+
+                const result = await apiCall('/api/files/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: currentAction,
+                        sourceKeys: selectedItems,
+                        destinationPrefix: selectedDestination
+                    })
+                });
+
+                if (result.success) {
+                    showNotification(result.message, 'success');
+                    loadGallery();
+                }
+                moveCopyModal.hide();
             });
 
             function showLoading(show) {
@@ -2227,6 +2426,126 @@ async function handleListSharedFiles(request, env, params) {
     } catch (error) {
         console.error('List shared files error:', error);
         return new Response(JSON.stringify({ success: false, message: 'Failed to list files' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+}
+
+/**
+ * 处理文件操作，如移动或复制
+ * @param {Request} request 传入的请求
+ * @param {R2Bucket} bucket R2存储桶实例
+ * @returns {Promise<Response>}
+ */
+async function handleFileAction(request, bucket) {
+    try {
+        const body = await request.json();
+        const { action, sourceKeys, destinationPrefix } = body;
+
+        if (!['move', 'copy'].includes(action)) {
+            return new Response(JSON.stringify({ success: false, message: "Invalid action" }), { status: 400 });
+        }
+        if (!Array.isArray(sourceKeys) || sourceKeys.length === 0) {
+            return new Response(JSON.stringify({ success: false, message: "No source files specified" }), { status: 400 });
+        }
+        if (typeof destinationPrefix !== 'string') {
+            return new Response(JSON.stringify({ success: false, message: "Invalid destination" }), { status: 400 });
+        }
+
+        const results = [];
+        for (const sourceKey of sourceKeys) {
+            const fileName = sourceKey.split('/').pop();
+            let destKey = (destinationPrefix.endsWith('/') ? destinationPrefix : destinationPrefix + '/') + fileName;
+            if (destinationPrefix === '/') {
+                destKey = fileName;
+            }
+
+
+            try {
+                const object = await bucket.get(sourceKey);
+                if (object === null) {
+                    results.push({ source: sourceKey, status: 'error', error: 'Source not found' });
+                    continue;
+                }
+
+                await bucket.put(destKey, object.body, {
+                    httpMetadata: object.httpMetadata,
+                    customMetadata: object.customMetadata,
+                });
+
+                if (action === 'move') {
+                    await bucket.delete(sourceKey);
+                }
+                results.push({ source: sourceKey, destination: destKey, status: 'success' });
+            } catch (e) {
+                results.push({ source: sourceKey, status: 'error', error: e.message });
+            }
+        }
+
+        const successCount = results.filter(r => r.status === 'success').length;
+        const actionText = action === 'move' ? '移动' : '复制';
+
+        return new Response(JSON.stringify({
+            success: true,
+            message: `成功${actionText} ${successCount} 个文件`,
+            results,
+        }), { headers: { 'Content-Type': 'application/json' } });
+
+    } catch (error) {
+        console.error('File action error:', error);
+        return new Response(JSON.stringify({ success: false, message: 'Failed to perform file action' }), { status: 500 });
+    }
+}
+
+/**
+ * 列出R2存储桶中所有的目录
+ * @param {Request} request 传入的请求
+ * @param {R2Bucket} bucket R2存储桶实例
+ * @returns {Promise<Response>}
+ */
+async function handleListDirectories(request, bucket) {
+    try {
+        const directorySet = new Set();
+        
+        async function fetchDirectories(prefix = '') {
+            let cursor = undefined;
+            while (true) {
+                const listResult = await bucket.list({
+                    prefix: prefix,
+                    delimiter: '/',
+                    cursor: cursor,
+                    limit: 1000
+                });
+
+                for (const dir of listResult.delimitedPrefixes) {
+                    if (!directorySet.has(dir)) {
+                        directorySet.add(dir);
+                        await fetchDirectories(dir); // 递归获取子目录
+                    }
+                }
+
+                if (!listResult.truncated) {
+                    break;
+                }
+                cursor = listResult.cursor;
+            }
+        }
+
+        await fetchDirectories();
+
+        const directories = Array.from(directorySet).map(path => {
+            const parts = path.replace(/\/$/, '').split('/');
+            const name = parts.pop() || '';
+            const parent = parts.length > 0 ? parts.join('/') + '/' : '/';
+            return { name, path, parent };
+        }).sort((a, b) => a.path.localeCompare(b.path));
+
+        return new Response(JSON.stringify({
+            success: true,
+            directories,
+        }), { headers: { 'Content-Type': 'application/json' } });
+
+    } catch (error) {
+        console.error('List directories error:', error);
+        return new Response(JSON.stringify({ success: false, message: 'Failed to list directories' }), { status: 500 });
     }
 }
 

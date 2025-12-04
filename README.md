@@ -37,8 +37,8 @@ PixR2 是一个 **无服务器部署（Serverless）** 的在线图床，基于 
 
 ### 0. 准备工作  
 - 准备一个可用的域名（Cloudflare 提供的 workers.dev 域名在中国大陆无法访问）
-- 创建一个 Telegram 机器人（在 Telegram 中搜索 @BotFather，按照指引创建你的机器人）
-- 获取你的 Telegram 用户 ID（ID 为纯数字，用于限制哪些用户可以使用该机器人）
+- [可选]创建一个 Telegram 机器人（在 Telegram 中搜索 @BotFather，按照指引创建你的机器人）
+- [可选]获取你的 Telegram 用户 ID（ID 为纯数字，用于限制哪些用户可以使用该机器人）
 
 ### 1. 创建 KV 与 R2 存储桶  
 - 在 Cloudflare 侧边栏中找到 **存储与数据库**
@@ -62,6 +62,7 @@ PixR2 是一个 **无服务器部署（Serverless）** 的在线图床，基于 
 | 变量名           | 说明                              |
 |------------------|---------------------------------|
 | SECRET_KEY       | Web 面板登陆密码（请不要使用弱密码） |
+| ENABLE_TELEGRAM_BOT | 是否启用 Telegram 机器人功能 ( `true` / `false` ）仅在启用时需要填写以下变量|
 | TELEGRAM_BOT_TOKEN | Telegram 机器人 Token |
 | USER_ID          | 允许使用此机器人的 Telegram 用户 ID，多个用户使用英文逗号分隔 |
 
